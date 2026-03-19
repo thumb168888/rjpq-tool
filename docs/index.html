@@ -87,12 +87,15 @@ input.f::placeholder{color:var(--dim)}
 .name-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .nlabel{font-size:.72rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
 .nameinput{flex:1;min-width:140px;background:var(--sur2);border:1px solid var(--brd);border-radius:var(--rs);
-  color:var(--txt);font-size:.85rem;padding:7px 10px;outline:none;font-family:inherit}
+  color:var(--txt);font-size:.85rem;padding:7px 10px;outline:none;font-family:inherit;-webkit-appearance:none;appearance:none}
 .nameinput:focus{border-color:var(--teal)}
 .namechips{display:flex;gap:7px;flex-wrap:wrap}
 .namechip{background:var(--sur2);border:1px solid var(--brd);color:var(--txt);border-radius:999px;
-  padding:5px 10px;font-size:.77rem;cursor:pointer;font-family:inherit}
+  padding:5px 10px;font-size:.77rem;cursor:pointer;font-family:inherit;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .namechip.on{border-color:var(--teal);color:var(--teal)}
+.plist-wrap{display:flex;flex-direction:column;gap:10px;width:100%}
+.plist-block{display:flex;flex-direction:column;gap:6px}
+.plist-title{font-size:.72rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
 .plist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
 .pitem{display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.03);border:1px solid var(--brd);
   border-radius:var(--rs);padding:6px 8px;font-size:.76rem;color:var(--txt);min-height:34px}
@@ -271,7 +274,7 @@ input.f::placeholder{color:var(--dim)}
     <div class="namebox">
       <div class="name-head">
         <span class="nlabel" id="nlabel">名字</span>
-        <input class="nameinput" id="name-input" placeholder="輸入名字 / Your name" maxlength="20"/>
+        <input class="nameinput" id="name-input" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="輸入名字 / Your name" maxlength="20"/>
       </div>
       <div class="namechips" id="namechips">
         <button class="namechip" type="button" data-name="芬妮">芬妮</button>
@@ -280,7 +283,16 @@ input.f::placeholder{color:var(--dim)}
         <button class="namechip" type="button" data-name="TZE">TZE</button>
         <button class="namechip" type="button" data-name="Jeffrey">Jeffrey</button>
       </div>
-      <div class="plist" id="plist"></div>
+      <div class="plist-wrap">
+        <div class="plist-block">
+          <div class="plist-title" id="selected-title">已選名單</div>
+          <div class="plist" id="plist-selected"></div>
+        </div>
+        <div class="plist-block">
+          <div class="plist-title" id="unselected-title">未選名單</div>
+          <div class="plist" id="plist-unselected"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -329,7 +341,6 @@ let myName     = '';
 let playerMap  = {};          // peerId → { color, name }
 let hasState   = false;
 let doors      = make10x4();  // [floor][door] = {colors:[], wrongMark:false}
-let onlineCount = 1;
 const PRESET_NAMES = ['芬妮','小塏','文大','TZE','Jeffrey'];
 
 function uid() {
@@ -435,14 +446,13 @@ function handleEvent(ev) {
 
   if (type === 'hello') {
     playerMap[from] = playerMap[from] || { color: null, name: '' };
-    onlineCount = Object.keys(playerMap).length + 1;
     updatePCount(); updateColorDots(); renderPlayerList();
     // If we have state, respond to help the newcomer
     if (hasState) {
       setTimeout(() => pub({
         type:'full_state',
         doors: serDoors(),
-        playerColors: getColors(),
+        players: getPlayers(),
       }), Math.random() * 800 | 0);
     }
   }
@@ -451,21 +461,21 @@ function handleEvent(ev) {
     setTimeout(() => pub({
       type:'full_state',
       doors: serDoors(),
-      playerColors: getColors(),
+      players: getPlayers(),
     }), Math.random() * 800 | 0);
   }
 
   if (type === 'full_state' && !hasState) {
     doors = desDoors(ev.doors);
     renderAll();
-    // Restore others' colors
-    if (ev.playerColors) {
-      Object.entries(ev.playerColors).forEach(([pid,data]) => {
+    // Restore known peers, including users without a chosen color yet
+    if (ev.players || ev.playerColors) {
+      const source = ev.players || ev.playerColors;
+      Object.entries(source).forEach(([pid,data]) => {
         if (typeof data === 'string') playerMap[pid] = { color: data, name: '' };
         else playerMap[pid] = { color: data?.color || null, name: data?.name || '' };
       });
     }
-    onlineCount = Object.keys(playerMap).length + 1;
     updatePCount(); updateColorDots(); renderPlayerList();
     hasState = true;
   }
@@ -490,7 +500,6 @@ function handleEvent(ev) {
 
   if (type === 'bye') {
     delete playerMap[from];
-    onlineCount = Object.keys(playerMap).length + 1;
     updatePCount(); updateColorDots(); renderPlayerList();
   }
 }
@@ -502,10 +511,10 @@ function serDoors() {
 function desDoors(raw) {
   return (raw||[]).map(row => row.map(c => ({colors:[...(c.colors||[])], wrongMark:false})));
 }
-function getColors() {
+function getPlayers() {
   const out = {};
   Object.entries(playerMap).forEach(([pid,data]) => {
-    if (data?.color) out[pid] = { color: data.color, name: data.name || '' };
+    out[pid] = { color: data?.color || null, name: data?.name || '' };
   });
   return out;
 }
@@ -635,22 +644,48 @@ function syncNameUI() {
   });
 }
 
+function chooseName(name) {
+  document.getElementById('name-input').value = name;
+  syncNameUI();
+  renderPlayerList();
+}
+
 function renderPlayerList() {
-  const list = document.getElementById('plist');
-  if (!list) return;
-  const entries = [];
-  if (myColor) entries.push({ color: myColor, name: getActiveName() || PRESET_NAMES[0] });
-  Object.values(playerMap).forEach(v => { if (v?.color) entries.push({ color: v.color, name: v.name || '未命名' }); });
-  const unique = entries.filter((item, idx) =>
-    idx === entries.findIndex(other => other.color === item.color)
+  const selectedList = document.getElementById('plist-selected');
+  const unselectedList = document.getElementById('plist-unselected');
+  if (!selectedList || !unselectedList) return;
+
+  const selectedEntries = [];
+  const unselectedEntries = [];
+  const myDisplayName = getActiveName() || PRESET_NAMES[0];
+
+  if (myColor) selectedEntries.push({ color: myColor, name: myDisplayName });
+  else if (getActiveName()) unselectedEntries.push({ name: myDisplayName });
+
+  Object.values(playerMap).forEach(v => {
+    const name = v?.name || (lang==='zh' ? '未命名' : 'Unnamed');
+    if (v?.color) selectedEntries.push({ color: v.color, name });
+    else unselectedEntries.push({ name });
+  });
+
+  const uniqueSelected = selectedEntries.filter((item, idx) =>
+    idx === selectedEntries.findIndex(other => other.color === item.color)
   );
-  if (!unique.length) {
-    list.innerHTML = `<div class="pitem empty">${lang==='zh'?'尚未有人選色':'No color selected yet'}</div>`;
-    return;
-  }
-  list.innerHTML = unique.map(item =>
+  const uniqueUnselected = unselectedEntries.filter((item, idx) =>
+    idx === unselectedEntries.findIndex(other => other.name === item.name)
+  );
+
+  selectedList.innerHTML = uniqueSelected.length
+    ? uniqueSelected.map(item =>
     `<div class="pitem"><span class="pswatch" style="--c:${CHX[item.color]}"></span><span class="pname">${CNAMES[lang][item.color]} · ${item.name}</span></div>`
-  ).join('');
+      ).join('')
+    : `<div class="pitem empty">${lang==='zh'?'尚未有人選色':'No color selected yet'}</div>`;
+
+  unselectedList.innerHTML = uniqueUnselected.length
+    ? uniqueUnselected.map(item =>
+        `<div class="pitem"><span class="pname">${item.name}</span></div>`
+      ).join('')
+    : `<div class="pitem empty">${lang==='zh'?'目前沒有人未選':'No pending players'}</div>`;
 }
 
 function updatePCount() {
@@ -732,7 +767,7 @@ function doExit(silent=false) {
     client = null;
   }
   roomCode=null; roomPass=null; myColor=null; myName=''; hasState=false;
-  playerMap={}; doors=make10x4(); onlineCount=1;
+  playerMap={}; doors=make10x4();
   document.getElementById('join-code').value='';
   document.getElementById('join-pass').value='';
   document.getElementById('create-pass').value='';
@@ -748,11 +783,11 @@ function doExit(silent=false) {
 const T={
   zh:{jlbl:'加入房間',jph1:'房間號碼',jph2:'密碼',jbtn:'進入',
       clbl2:'建立房間',cph:'設定密碼',cbtn:'建立',
-      clrl:'選擇顏色：',chint:'尚未選擇',nlabel:'名字',
+      clrl:'選擇顏色：',chint:'尚未選擇',nlabel:'名字',stitle:'已選名單',utitle:'未選名單',
       dh:['1','2','3','4'],lbtn:'中文 ⇆ EN'},
   en:{jlbl:'Join Room',jph1:'Room Code',jph2:'Password',jbtn:'Access',
       clbl2:'Create Room',cph:'Set Password',cbtn:'Create',
-      clrl:'Pick color:',chint:'Not selected',nlabel:'Name',
+      clrl:'Pick color:',chint:'Not selected',nlabel:'Name',stitle:'Selected',utitle:'Unselected',
       dh:['1','2','3','4'],lbtn:'EN ⇆ 中文'},
 };
 function applyLang() {
@@ -768,6 +803,8 @@ function applyLang() {
   document.getElementById('clbl').textContent=t.clrl;
   if (!myColor) document.getElementById('chint').textContent=t.chint;
   document.getElementById('nlabel').textContent=t.nlabel;
+  document.getElementById('selected-title').textContent=t.stitle;
+  document.getElementById('unselected-title').textContent=t.utitle;
   document.querySelectorAll('.dh').forEach((el,i)=>{if(t.dh[i])el.textContent=t.dh[i];});
   document.getElementById('btn-lang').textContent=t.lbtn;
   renderPlayerList();
@@ -782,12 +819,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('create-pass').addEventListener('keydown', e => { if(e.key==='Enter') createRoom(); });
   document.querySelectorAll('.cdot').forEach(dot =>
     dot.addEventListener('click', ()=>pickColor(dot.dataset.color)));
-  document.querySelectorAll('.namechip').forEach(btn =>
-    btn.addEventListener('click', () => {
-      document.getElementById('name-input').value = btn.dataset.name;
-      syncNameUI();
-      renderPlayerList();
-    }));
+  document.querySelectorAll('.namechip').forEach(btn => {
+    btn.addEventListener('click', () => chooseName(btn.dataset.name));
+    btn.addEventListener('pointerup', () => chooseName(btn.dataset.name));
+    btn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      chooseName(btn.dataset.name);
+    }, { passive: false });
+  });
   document.getElementById('name-input').addEventListener('input', () => {
     syncNameUI();
     renderPlayerList();
