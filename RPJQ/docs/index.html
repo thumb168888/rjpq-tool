@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RJPQ 小工具</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0f;--sur:#13131d;--sur2:#1c1c2e;--brd:#2a2a42;
+  --teal:#00c9a7;--yellow:#ffd166;--red:#ef476f;
+  --txt:#e8e8f0;--dim:#7a7a9a;--r:11px;--rs:7px;
+  --orange:#ff8c42;--green:#3ddc84;--blue:#4fc3f7;--pink:#f06292;
+}
+html,body{min-height:100%}
+body{background:var(--bg);color:var(--txt);font-family:'Inter','Microsoft JhengHei',sans-serif;
+  padding:16px;overflow-y:auto}
+.scr{display:none;width:100%;justify-content:center}
+.scr.on{display:flex}
+.card{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);
+  padding:28px 24px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.55)}
+.home-card{max-width:460px}
+.room-card{max-width:530px}
+.logo{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.logo-icon{font-size:2.2rem}
+.logo h1{font-size:1.4rem;font-weight:700;color:var(--teal)}
+.logo .sub{font-size:.75rem;color:var(--dim);margin-top:2px}
+.blk{margin-bottom:14px}
+.lbl{display:block;font-size:.72rem;font-weight:600;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px}
+.irow{display:flex;gap:7px;flex-wrap:wrap}
+input.f{flex:1;min-width:80px;background:var(--sur2);border:1px solid var(--brd);
+  border-radius:var(--rs);color:var(--txt);font-size:.9rem;padding:8px 11px;outline:none;
+  transition:border-color .2s;font-family:inherit}
+input.f:focus{border-color:var(--teal)}
+input.f::placeholder{color:var(--dim)}
+.btn{border:none;border-radius:var(--rs);font-size:.88rem;font-weight:600;cursor:pointer;
+  padding:8px 16px;transition:opacity .18s,transform .12s;white-space:nowrap;font-family:inherit}
+.btn:hover{opacity:.85}.btn:active{transform:scale(.96)}
+.btn-t{background:var(--teal);color:#000}
+.btn-y{background:var(--yellow);color:#000}
+.btn-g{background:transparent;border:1px solid var(--brd);border-radius:var(--rs);
+  color:var(--dim);font-size:.8rem;cursor:pointer;padding:5px 11px;transition:border-color .2s,color .2s;font-family:inherit}
+.btn-g:hover{border-color:var(--teal);color:var(--teal)}
+.btn-i{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--rs);
+  color:var(--txt);font-size:.95rem;cursor:pointer;padding:5px 9px;
+  transition:background .18s;line-height:1;font-family:inherit}
+.btn-i:hover{background:var(--brd)}
+.btn-i.danger:hover{background:#3a0018;border-color:var(--red);color:var(--red)}
+.div{display:flex;align-items:center;gap:10px;margin:16px 0;color:var(--dim);font-size:.75rem}
+.div::before,.div::after{content:'';flex:1;border-top:1px solid var(--brd)}
+.err{margin-top:6px;font-size:.78rem;color:var(--red);padding:5px 9px;
+  background:rgba(239,71,111,.08);border-radius:var(--rs);border:1px solid rgba(239,71,111,.25)}
+.h{display:none}
+.hfoot{margin-top:22px;display:flex;align-items:center;justify-content:space-between}
+.fn{font-size:.7rem;color:var(--dim)}
+/* Room */
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px}
+.rinfo{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rlbl{color:var(--dim);font-size:.68rem;font-weight:600;text-transform:uppercase}
+.rcval{color:var(--yellow);font-weight:700;font-size:1.05rem;letter-spacing:.07em;font-variant-numeric:tabular-nums}
+.rpval{color:var(--teal);font-weight:600;font-size:.88rem}
+.racts{display:flex;align-items:center;gap:7px}
+.pcount{font-size:.78rem;color:var(--dim);background:var(--sur2);border:1px solid var(--brd);border-radius:var(--rs);padding:3px 8px}
+/* Status */
+.sbar{font-size:.75rem;color:var(--dim);background:var(--sur2);border:1px solid var(--brd);
+  border-radius:var(--rs);padding:5px 10px;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.sdot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:background .3s}
+.sdot.ok{background:var(--teal)}.sdot.warn{background:var(--yellow)}
+/* Color row */
+.crow{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.cdots{display:flex;gap:9px}
+.cdot{width:28px;height:28px;border-radius:50%;background:var(--c);border:3px solid transparent;
+  cursor:pointer;transition:transform .15s,border-color .15s,opacity .15s;opacity:.4;position:relative}
+.cdot:hover{transform:scale(1.1);opacity:.75}
+.cdot.sel{border-color:#fff;opacity:1;transform:scale(1.15)}
+.cdot.taken{opacity:.15;cursor:not-allowed}
+.cdot.taken::after{content:'✕';position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;color:rgba(255,255,255,.6);font-size:.7rem}
+.chint{font-size:.76rem;color:var(--dim)}
+/* Grid */
+.gwrap{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--r);overflow:hidden;margin-bottom:10px}
+.ghdr{display:grid;grid-template-columns:36px repeat(4,1fr);background:#0f0f1a;padding:5px 8px;gap:3px}
+.fnum,.dh{font-size:.68rem;color:var(--dim);font-weight:600;text-transform:uppercase;text-align:center}
+.dg{display:flex;flex-direction:column}
+.frow{display:grid;grid-template-columns:36px repeat(4,1fr);gap:3px;padding:4px 8px;
+  border-top:1px solid var(--brd);align-items:center}
+.frow:hover{background:rgba(255,255,255,.018)}
+.fnc{font-size:.73rem;color:var(--dim);font-weight:600;text-align:center}
+.dbtn{position:relative;height:33px;border-radius:var(--rs);border:1.5px solid var(--brd);
+  background:var(--sur);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  gap:3px;transition:border-color .15s,background .15s;overflow:hidden;user-select:none}
+.dbtn:hover{border-color:var(--teal)}
+.dbtn.mk{border-color:transparent}
+.pip{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.dbtn.wr::after{content:'✕';position:absolute;top:1px;right:3px;font-size:.58rem;color:var(--red);opacity:.8}
+.leg{font-size:.7rem;color:var(--dim);text-align:center;margin-bottom:4px}
+/* Guide panel */
+.room-wrap{display:flex;gap:14px;align-items:flex-start;width:100%;max-width:860px;justify-content:center;margin:0 auto}
+.guide{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);
+  padding:18px 14px;width:200px;flex-shrink:0;box-shadow:0 8px 40px rgba(0,0,0,.55)}
+.guide-title{font-size:.78rem;font-weight:700;color:var(--teal);letter-spacing:.06em;
+  text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.stage{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--brd)}
+.stage:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
+.stage-hd{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.stage-num{background:var(--teal);color:#000;font-size:.62rem;font-weight:700;
+  border-radius:4px;padding:1px 6px;flex-shrink:0}
+.stage-name{font-size:.78rem;font-weight:600;color:var(--txt)}
+.stage-cond{font-size:.72rem;color:var(--dim);margin-top:2px;line-height:1.5}
+.perf{display:inline-flex;align-items:center;gap:3px;background:rgba(255,209,102,.1);
+  border:1px solid rgba(255,209,102,.35);border-radius:4px;
+  color:var(--yellow);font-size:.68rem;font-weight:600;padding:1px 6px;margin-top:3px}
+@media(max-width:900px){
+  body{padding:12px}
+  .room-wrap{flex-direction:column;align-items:stretch;max-width:530px}
+  .guide,.room-card{width:100%;max-width:none}
+}
+@media(max-width:700px){
+  .topbar,.rinfo,.racts,.crow{align-items:flex-start}
+  .rinfo,.racts{width:100%;justify-content:flex-start}
+  .guide{width:100%;max-width:none}
+}
+/* Toast */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);
+  background:var(--sur2);border:1px solid var(--teal);color:var(--teal);
+  border-radius:var(--rs);padding:9px 18px;font-size:.83rem;font-weight:600;
+  opacity:0;transition:opacity .3s,transform .3s;pointer-events:none;z-index:999;white-space:nowrap}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media(max-width:460px){
+  body{padding:10px}
+  .card,.guide{padding:16px 12px}
+  .ghdr,.frow{grid-template-columns:30px repeat(4,minmax(0,1fr));padding-left:6px;padding-right:6px}
+  .dbtn{height:36px}
+  .leg{line-height:1.5}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ HOME ═══ -->
+<div id="home-scr" class="scr on">
+<div class="card home-card">
+  <div class="logo">
+    <span class="logo-icon">🗝️</span>
+    <div><h1>RJPQ 小工具</h1><p class="sub">羅密歐與茱麗葉 組隊任務輔助</p></div>
+  </div>
+
+  <!-- JOIN -->
+  <div class="blk">
+    <label class="lbl">加入房間</label>
+    <div class="irow">
+      <input class="f" id="join-code" placeholder="房間號碼" maxlength="6" inputmode="numeric"/>
+      <input class="f" id="join-pass" placeholder="密碼" maxlength="20"/>
+      <button class="btn btn-t" id="btn-join">進入</button>
+    </div>
+    <div id="join-err" class="err h"></div>
+  </div>
+
+  <div class="div"><span>或</span></div>
+
+  <!-- CREATE -->
+  <div class="blk">
+    <label class="lbl">建立房間</label>
+    <div class="irow">
+      <input class="f" id="create-pass" placeholder="設定密碼" maxlength="20"/>
+      <button class="btn btn-y" id="btn-create">建立</button>
+    </div>
+    <div id="create-err" class="err h"></div>
+  </div>
+
+  <div class="hfoot">
+    <button class="btn-g" id="btn-lang">中文 ⇆ EN</button>
+    <span class="fn">羅茱小工具 · 無需安裝</span>
+  </div>
+</div>
+</div>
+
+<!-- ═══ ROOM ═══ -->
+<div id="room-scr" class="scr">
+<div class="room-wrap">
+
+<!-- ── 通關指南 ── -->
+<div class="guide">
+  <div class="guide-title">🗺 通關指南</div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">1F</span><span class="stage-name">找信 + 機關</span></div>
+    <div class="perf">⭐ 完美① 找信</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">2F</span><span class="stage-name">清怪</span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">3F</span><span class="stage-name">把水倒滿</span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">4F</span><span class="stage-name">找資料 + 交信給NPC</span></div>
+    <div class="perf">⭐ 完美② 交信給NPC</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">5F</span><span class="stage-name">不碰NPC + 清怪</span></div>
+    <div class="perf">⭐ 完美③ 不碰NPC</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">6F</span><span class="stage-name">四個房間跳跳</span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">7F</span><span class="stage-name">打王</span></div>
+  </div>
+</div>
+
+<!-- ── 房間 ── -->
+<div class="card room-card">
+
+  <div class="topbar">
+    <div class="rinfo">
+      <span class="rlbl">Code</span>
+      <span id="disp-code" class="rcval">──────</span>
+      <span class="rlbl">PW</span>
+      <span id="disp-pass" class="rpval">──────</span>
+      <button class="btn-i" id="btn-copy" title="複製房間資訊">⧉</button>
+    </div>
+    <div class="racts">
+      <span id="pcount" class="pcount">👤 1</span>
+      <button class="btn-i danger" id="btn-clear" title="清除所有標記">🧹</button>
+      <button class="btn-i" id="btn-exit" title="離開">✕</button>
+    </div>
+  </div>
+
+  <div class="sbar"><span class="sdot" id="sdot"></span><span id="stxt">正在連線…</span></div>
+
+  <div class="crow">
+    <span class="lbl" id="clbl">選擇顏色：</span>
+    <div class="cdots" id="cdots">
+      <button class="cdot" data-color="orange" style="--c:var(--orange)" title="橘色"></button>
+      <button class="cdot" data-color="green"  style="--c:var(--green)"  title="綠色"></button>
+      <button class="cdot" data-color="blue"   style="--c:var(--blue)"   title="藍色"></button>
+      <button class="cdot" data-color="pink"   style="--c:var(--pink)"   title="粉色"></button>
+    </div>
+    <span class="chint" id="chint">尚未選擇</span>
+  </div>
+
+  <div class="gwrap">
+    <div class="ghdr">
+      <span class="fnum"></span>
+      <span class="dh">門 1</span><span class="dh">門 2</span>
+      <span class="dh">門 3</span><span class="dh">門 4</span>
+    </div>
+    <div class="dg" id="dgrid"></div>
+  </div>
+  <div class="leg">左鍵：標記通過（共享）｜右鍵：私人錯誤記錄</div>
+</div>
+
+</div><!-- /room-wrap -->
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ========================================================
+   RJPQ Tool — MQTT version
+   Broker: HiveMQ public MQTT over WSS (no registration)
+   Room code: 6-digit number + password
+   ======================================================== */
+
+// ── Config ──────────────────────────────────────────────
+const BROKER  = 'wss://broker.hivemq.com:8884/mqtt';
+const PREFIX  = 'rjpq-tool-v2';
+
+const COLORS  = ['orange','green','blue','pink'];
+const CHX     = {orange:'#ff8c42',green:'#3ddc84',blue:'#4fc3f7',pink:'#f06292'};
+const CNAMES  = {
+  zh:{orange:'橘色',green:'綠色',blue:'藍色',pink:'粉色'},
+  en:{orange:'Orange',green:'Green',blue:'Blue',pink:'Pink'},
+};
+
+// ── State ────────────────────────────────────────────────
+let lang       = 'zh';
+let client     = null;        // MQTT client
+let roomCode   = null;
+let roomPass   = null;
+let myId       = uid();       // unique client id
+let myColor    = null;
+let playerMap  = {};          // peerId → color
+let hasState   = false;
+let doors      = make10x4();  // [floor][door] = {colors:[], wrongMark:false}
+let onlineCount = 1;
+
+function uid() {
+  return Math.random().toString(36).slice(2,10).toUpperCase();
+}
+function make10x4() {
+  return Array.from({length:10}, () =>
+    Array.from({length:4}, () => ({colors:[], wrongMark:false})));
+}
+function topicInfo(c)   { return `${PREFIX}/${c}/info`; }
+function topicEvents(c) { return `${PREFIX}/${c}/events`; }
+
+// ── Toast ────────────────────────────────────────────────
+function toast(msg, ms=2200) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// ── Screen helpers ───────────────────────────────────────
+function showScr(name) {
+  document.querySelectorAll('.scr').forEach(s => s.classList.remove('on'));
+  document.getElementById(name+'-scr').classList.add('on');
+}
+function showErr(id, msg) { const e=document.getElementById(id); e.textContent=msg; e.classList.remove('h'); }
+function clearErr(id)      { document.getElementById(id).classList.add('h'); }
+function setStatus(txt, state) {
+  document.getElementById('stxt').textContent = txt;
+  const dot = document.getElementById('sdot');
+  dot.className = 'sdot' + (state ? ' '+state : '');
+}
+
+// ── MQTT publish helper ──────────────────────────────────
+function pub(event) {
+  if (!client || !roomCode) return;
+  client.publish(topicEvents(roomCode), JSON.stringify({...event, from: myId}), {qos:0});
+}
+
+// ── Connect to MQTT broker ───────────────────────────────
+function connectMQTT(onReady) {
+  const cid = 'rjpq_' + myId + '_' + Date.now();
+  setStatus(lang==='zh' ? '正在連接伺服器…' : 'Connecting…', 'warn');
+
+  client = mqtt.connect(BROKER, {
+    clientId: cid,
+    clean: true,
+    connectTimeout: 12000,
+    reconnectPeriod: 0,      // no auto-reconnect for cleaner UX
+  });
+
+  client.on('connect', () => onReady());
+  client.on('error', err => {
+    const msg = lang==='zh' ? '連線錯誤：' + (err.message||'') : 'Connection error: ' + (err.message||'');
+    setStatus(msg, '');
+    showErr('join-err',   msg);
+    showErr('create-err', msg);
+  });
+  client.on('message', onMessage);
+  client.on('reconnect', () => setStatus(lang==='zh' ? '重新連線中…':'Reconnecting…','warn'));
+  client.on('offline',   () => setStatus(lang==='zh' ? '已離線':'Offline', ''));
+}
+
+// ── Message handler ──────────────────────────────────────
+function onMessage(topic, payload) {
+  // Info topic (retained) — used for join verification
+  if (topic === topicInfo(roomCode)) {
+    handleInfoMsg(payload.toString());
+    return;
+  }
+  // Events topic
+  if (topic === topicEvents(roomCode)) {
+    try { handleEvent(JSON.parse(payload.toString())); } catch {}
+  }
+}
+
+function handleInfoMsg(raw) {
+  // Called only during join flow; after verification we unsubscribe
+  try {
+    const info = JSON.parse(raw);
+    if (info.password !== roomPass) {
+      showErr('join-err', lang==='zh' ? '密碼錯誤 / Wrong password' : 'Wrong password');
+      doExit(true);
+      return;
+    }
+    // Password OK — subscribe to events and enter room
+    client.unsubscribe(topicInfo(roomCode));
+    client.subscribe(topicEvents(roomCode), {qos:1});
+    enterRoom();
+    // Announce and request state
+    pub({type:'hello'});
+    pub({type:'request_state'});
+  } catch {
+    showErr('join-err', lang==='zh' ? '無法解析房間資訊' : 'Failed to parse room info');
+    doExit(true);
+  }
+}
+
+function handleEvent(ev) {
+  if (!ev || !ev.type) return;
+  const {type, from} = ev;
+  if (from === myId) return; // ignore own messages
+
+  if (type === 'hello') {
+    playerMap[from] = playerMap[from] || null;
+    onlineCount = Object.keys(playerMap).length + 1;
+    updatePCount();
+    // If we have state, respond to help the newcomer
+    if (hasState) {
+      setTimeout(() => pub({
+        type:'full_state',
+        doors: serDoors(),
+        playerColors: getColors(),
+      }), Math.random() * 800 | 0);
+    }
+  }
+
+  if (type === 'request_state' && hasState) {
+    setTimeout(() => pub({
+      type:'full_state',
+      doors: serDoors(),
+      playerColors: getColors(),
+    }), Math.random() * 800 | 0);
+  }
+
+  if (type === 'full_state' && !hasState) {
+    doors = desDoors(ev.doors);
+    renderAll();
+    // Restore others' colors
+    if (ev.playerColors) {
+      Object.entries(ev.playerColors).forEach(([pid,col]) => { playerMap[pid] = col; });
+    }
+    onlineCount = Object.keys(playerMap).length + 1;
+    updatePCount(); updateColorDots();
+    hasState = true;
+  }
+
+  if (type === 'door_toggle') {
+    const {floor:f, door:d, color} = ev;
+    const cell = doors[f][d];
+    const idx  = cell.colors.indexOf(color);
+    if (idx===-1) cell.colors.push(color); else cell.colors.splice(idx,1);
+    renderDoor(f, d);
+  }
+
+  if (type === 'color_pick') {
+    playerMap[from] = ev.color;
+    updateColorDots();
+  }
+
+  if (type === 'clear_all') {
+    doors = make10x4(); renderAll();
+    toast(lang==='zh' ? '已清除所有標記' : 'All marks cleared');
+  }
+
+  if (type === 'bye') {
+    delete playerMap[from];
+    onlineCount = Object.keys(playerMap).length + 1;
+    updatePCount(); updateColorDots();
+  }
+}
+
+// ── Serialization ────────────────────────────────────────
+function serDoors() {
+  return doors.map(row => row.map(c => ({colors:[...c.colors]})));
+}
+function desDoors(raw) {
+  return (raw||[]).map(row => row.map(c => ({colors:[...(c.colors||[])], wrongMark:false})));
+}
+function getColors() {
+  const out = {};
+  Object.entries(playerMap).forEach(([pid,col]) => { if(col) out[pid] = col; });
+  return out;
+}
+
+// ── Enter room ───────────────────────────────────────────
+function enterRoom() {
+  document.getElementById('disp-code').textContent = roomCode;
+  document.getElementById('disp-pass').textContent = roomPass;
+  setStatus(lang==='zh' ? '已連線' : 'Connected', 'ok');
+  buildGrid();
+  updatePCount();
+  updateColorDots();
+  showScr('room');
+}
+
+// ── Create room ──────────────────────────────────────────
+function createRoom() {
+  clearErr('create-err');
+  const pass = document.getElementById('create-pass').value.trim();
+  if (!pass) { showErr('create-err', lang==='zh'?'請輸入密碼':'Enter a password'); return; }
+
+  roomCode = String(100000 + (Math.random() * 900000 | 0));
+  roomPass = pass;
+
+  connectMQTT(() => {
+    // Publish retained room info
+    const info = JSON.stringify({password: pass, created: Date.now()});
+    client.publish(topicInfo(roomCode), info, {retain:true, qos:1});
+    // Subscribe to events
+    client.subscribe(topicEvents(roomCode), {qos:1});
+    hasState = true;
+    enterRoom();
+    pub({type:'hello'});
+  });
+}
+
+// ── Join room ─────────────────────────────────────────────
+function joinRoom() {
+  clearErr('join-err');
+  const code = document.getElementById('join-code').value.trim();
+  const pass = document.getElementById('join-pass').value.trim();
+  if (!code) { showErr('join-err', lang==='zh'?'請輸入房號':'Enter room code'); return; }
+  if (!pass) { showErr('join-err', lang==='zh'?'請輸入密碼':'Enter password'); return; }
+
+  roomCode = code;
+  roomPass = pass;
+
+  connectMQTT(() => {
+    // Subscribe to info topic to get retained room info (for password check)
+    client.subscribe(topicInfo(roomCode), {qos:1});
+    setStatus(lang==='zh' ? '正在驗證房間…' : 'Verifying room…', 'warn');
+
+    // Timeout if no retained message (room doesn't exist)
+    const timer = setTimeout(() => {
+      showErr('join-err', lang==='zh' ? `找不到房間 ${code}，請確認房號` : `Room ${code} not found`);
+      doExit(true);
+    }, 6000);
+
+    // One-shot listener for info message
+    const origHandler = client.listeners('message')[0];
+    client.removeAllListeners('message');
+    client.on('message', (topic, payload) => {
+      if (topic === topicInfo(roomCode)) {
+        clearTimeout(timer);
+        client.removeAllListeners('message');
+        client.on('message', onMessage); // restore normal handler
+        handleInfoMsg(payload.toString());
+      }
+    });
+  });
+}
+
+// ── Door clicks ──────────────────────────────────────────
+function onLeft(f, d) {
+  if (!myColor) { toast(lang==='zh'?'請先選擇顏色！':'Pick a color first!'); return; }
+  const cell = doors[f][d];
+  const idx  = cell.colors.indexOf(myColor);
+  if (idx===-1) cell.colors.push(myColor); else cell.colors.splice(idx,1);
+  renderDoor(f, d);
+  pub({type:'door_toggle', floor:f, door:d, color:myColor});
+}
+function onRight(f, d) {
+  doors[f][d].wrongMark = !doors[f][d].wrongMark;
+  renderDoor(f, d);
+}
+
+// ── Color pick ───────────────────────────────────────────
+function pickColor(color) {
+  const taken = Object.values(playerMap).includes(color);
+  if (taken && color !== myColor) { toast(lang==='zh'?'此顏色已被使用':'Color taken'); return; }
+  myColor = color;
+  pub({type:'color_pick', color});
+  updateColorDots();
+  document.getElementById('chint').textContent =
+    (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][color];
+}
+
+function updateColorDots() {
+  const takenColors = new Set(Object.values(playerMap));
+  document.querySelectorAll('.cdot').forEach(dot => {
+    const c = dot.dataset.color;
+    dot.classList.remove('sel','taken');
+    if (c === myColor) dot.classList.add('sel');
+    else if (takenColors.has(c)) dot.classList.add('taken');
+  });
+}
+
+function updatePCount() {
+  document.getElementById('pcount').textContent = '👤 ' + (Object.keys(playerMap).length + 1);
+}
+
+// ── Grid ─────────────────────────────────────────────────
+function buildGrid() {
+  const g = document.getElementById('dgrid'); g.innerHTML = '';
+  for (let f=9; f>=0; f--) {
+    const row = document.createElement('div'); row.className = 'frow';
+    const lbl = document.createElement('span'); lbl.className = 'fnc'; lbl.textContent = f+1;
+    row.appendChild(lbl);
+    for (let d=0; d<4; d++) {
+      const btn = document.createElement('button');
+      btn.className = 'dbtn'; btn.id = `d${f}_${d}`;
+      btn.addEventListener('click', ()=>onLeft(f,d));
+      btn.addEventListener('contextmenu', e=>{e.preventDefault();onRight(f,d);});
+      row.appendChild(btn);
+    }
+    g.appendChild(row);
+  }
+  renderAll();
+}
+function renderDoor(f, d, el) {
+  const btn = el || document.getElementById(`d${f}_${d}`); if(!btn) return;
+  const {colors, wrongMark} = doors[f][d];
+  btn.innerHTML = '';
+  if (colors.length) {
+    btn.classList.add('mk');
+    btn.style.background = colors.length===1
+      ? CHX[colors[0]]+'33'
+      : 'linear-gradient(135deg,'+colors.map(c=>CHX[c]+'55').join(',')+')'
+    btn.style.borderColor = CHX[colors[0]];
+    colors.forEach(c => {
+      const p=document.createElement('span'); p.className='pip'; p.style.background=CHX[c]; btn.appendChild(p);
+    });
+  } else {
+    btn.classList.remove('mk'); btn.style.background=''; btn.style.borderColor='';
+  }
+  wrongMark ? btn.classList.add('wr') : btn.classList.remove('wr');
+}
+function renderAll() {
+  for(let f=0;f<10;f++) for(let d=0;d<4;d++) renderDoor(f,d);
+}
+
+// ── Copy info ─────────────────────────────────────────────
+function copyInfo() {
+  const link = location.hostname === 'localhost'
+    ? location.host : location.hostname;
+  const txt = `Code: ${roomCode} | Password: ${roomPass} | Link: ${link}`;
+  navigator.clipboard.writeText(txt)
+    .then(() => toast(lang==='zh'?'✓ 已複製房間資訊':'✓ Copied!'))
+    .catch(() => {
+      const ta=document.createElement('textarea'); ta.value=txt;
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta); toast(lang==='zh'?'✓ 已複製':'✓ Copied');
+    });
+}
+
+// ── Clear all ─────────────────────────────────────────────
+function doClear() {
+  if (!confirm(lang==='zh'?'確定清除所有標記？':'Clear all marks?')) return;
+  doors = make10x4(); renderAll();
+  pub({type:'clear_all'});
+  toast(lang==='zh'?'已清除所有標記':'All marks cleared');
+}
+
+// ── Exit ─────────────────────────────────────────────────
+function doExit(silent=false) {
+  if (client) {
+    if (!silent && roomCode) pub({type:'bye'});
+    client.end(true);
+    client = null;
+  }
+  roomCode=null; roomPass=null; myColor=null; hasState=false;
+  playerMap={}; doors=make10x4(); onlineCount=1;
+  document.getElementById('join-code').value='';
+  document.getElementById('join-pass').value='';
+  document.getElementById('create-pass').value='';
+  document.getElementById('chint').textContent = lang==='zh'?'尚未選擇':'Not selected';
+  clearErr('join-err'); clearErr('create-err');
+  showScr('home');
+}
+
+// ── Lang ──────────────────────────────────────────────────
+const T={
+  zh:{jlbl:'加入房間',jph1:'房間號碼',jph2:'密碼',jbtn:'進入',
+      clbl2:'建立房間',cph:'設定密碼',cbtn:'建立',
+      clrl:'選擇顏色：',chint:'尚未選擇',
+      dh:['門 1','門 2','門 3','門 4'],lbtn:'中文 ⇆ EN'},
+  en:{jlbl:'Join Room',jph1:'Room Code',jph2:'Password',jbtn:'Access',
+      clbl2:'Create Room',cph:'Set Password',cbtn:'Create',
+      clrl:'Pick color:',chint:'Not selected',
+      dh:['Door 1','Door 2','Door 3','Door 4'],lbtn:'EN ⇆ 中文'},
+};
+function applyLang() {
+  const t=T[lang];
+  const labels = document.querySelectorAll('#home-scr .lbl');
+  if(labels[0]) labels[0].textContent=t.jlbl;
+  if(labels[1]) labels[1].textContent=t.clbl2;
+  document.getElementById('join-code').placeholder=t.jph1;
+  document.getElementById('join-pass').placeholder=t.jph2;
+  document.getElementById('btn-join').textContent=t.jbtn;
+  document.getElementById('create-pass').placeholder=t.cph;
+  document.getElementById('btn-create').textContent=t.cbtn;
+  document.getElementById('clbl').textContent=t.clrl;
+  document.getElementById('chint').textContent=t.chint;
+  document.querySelectorAll('.dh').forEach((el,i)=>{if(t.dh[i])el.textContent=t.dh[i];});
+  document.getElementById('btn-lang').textContent=t.lbtn;
+}
+
+// ── Boot ──────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('btn-join').addEventListener('click', joinRoom);
+  document.getElementById('btn-create').addEventListener('click', createRoom);
+  ['join-code','join-pass'].forEach(id =>
+    document.getElementById(id).addEventListener('keydown', e => { if(e.key==='Enter') joinRoom(); }));
+  document.getElementById('create-pass').addEventListener('keydown', e => { if(e.key==='Enter') createRoom(); });
+  document.querySelectorAll('.cdot').forEach(dot =>
+    dot.addEventListener('click', ()=>pickColor(dot.dataset.color)));
+  document.getElementById('btn-copy').addEventListener('click', copyInfo);
+  document.getElementById('btn-clear').addEventListener('click', doClear);
+  document.getElementById('btn-exit').addEventListener('click', ()=>doExit(false));
+  document.getElementById('btn-lang').addEventListener('click', ()=>{
+    lang = lang==='zh'?'en':'zh'; applyLang();
+  });
+});
+</script>
+</body>
+</html>
