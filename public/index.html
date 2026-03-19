@@ -57,6 +57,10 @@ input.f::placeholder{color:var(--dim)}
 .h{display:none}
 .hfoot{margin-top:22px;display:flex;align-items:center;justify-content:space-between}
 .fn{font-size:.7rem;color:var(--dim)}
+.tips{margin-top:16px;background:rgba(255,255,255,.03);border:1px solid var(--brd);border-radius:var(--rs);padding:12px}
+.tips-title{font-size:.72rem;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.tips-list{display:flex;flex-direction:column;gap:6px}
+.tips-item{font-size:.76rem;color:var(--dim);line-height:1.5}
 /* Room */
 .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px}
 .rinfo{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -196,6 +200,15 @@ input.f::placeholder{color:var(--dim)}
     <div id="create-err" class="err h"></div>
   </div>
 
+  <div class="tips">
+    <div class="tips-title" id="home-tips-title">使用說明</div>
+    <div class="tips-list">
+      <div class="tips-item" id="home-tip-1">1. 建立房間或輸入房號加入。</div>
+      <div class="tips-item" id="home-tip-2">2. 進房後先選名字，再選顏色。</div>
+      <div class="tips-item" id="home-tip-3">3. 顏色與名字都不能重複。</div>
+    </div>
+  </div>
+
   <div class="hfoot">
     <button class="btn-g" id="btn-lang">中文 ⇆ EN</button>
     <span class="fn">羅茱小工具 · 無需安裝</span>
@@ -306,7 +319,17 @@ input.f::placeholder{color:var(--dim)}
     </div>
     <div class="dg" id="dgrid"></div>
   </div>
-  <div class="leg">左鍵：標記通過（共享）｜右鍵：私人錯誤記錄</div>
+  <div class="tips">
+    <div class="tips-title" id="room-tips-title">房內說明</div>
+    <div class="tips-list">
+      <div class="tips-item" id="room-tip-1">1. 先選名字，再選顏色。</div>
+      <div class="tips-item" id="room-tip-2">2. 已選名單可看誰拿哪個顏色。</div>
+      <div class="tips-item" id="room-tip-3">3. 未選名單可看誰還沒選色。</div>
+      <div class="tips-item" id="room-tip-4">4. 左鍵標記通過門，會同步給隊友。</div>
+      <div class="tips-item" id="room-tip-5">5. 右鍵是私人錯誤記錄，只自己看得到。</div>
+      <div class="tips-item" id="room-tip-6">6. 右上角會顯示目前在線人數。</div>
+    </div>
+  </div>
 </div>
 
 </div><!-- /room-wrap -->
@@ -811,11 +834,17 @@ const T={
   zh:{jlbl:'加入房間',jph1:'房間號碼',jph2:'密碼',jbtn:'進入',
       clbl2:'建立房間',cph:'設定密碼',cbtn:'建立',
       clrl:'選擇顏色：',chint:'尚未選擇',nlabel:'名字',stitle:'已選名單',utitle:'未選名單',
-      dh:['1','2','3','4'],lbtn:'中文 ⇆ EN'},
+      dh:['1','2','3','4'],lbtn:'中文 ⇆ EN',
+      htitle:'使用說明',ht1:'1. 建立房間或輸入房號加入。',ht2:'2. 進房後先選名字，再選顏色。',ht3:'3. 顏色與名字都不能重複。',
+      rtitle:'房內說明',rt1:'1. 先選名字，再選顏色。',rt2:'2. 已選名單可看誰拿哪個顏色。',rt3:'3. 未選名單可看誰還沒選色。',
+      rt4:'4. 左鍵標記通過門，會同步給隊友。',rt5:'5. 右鍵是私人錯誤記錄，只自己看得到。',rt6:'6. 右上角會顯示目前在線人數。'},
   en:{jlbl:'Join Room',jph1:'Room Code',jph2:'Password',jbtn:'Access',
       clbl2:'Create Room',cph:'Set Password',cbtn:'Create',
       clrl:'Pick color:',chint:'Not selected',nlabel:'Name',stitle:'Selected',utitle:'Unselected',
-      dh:['1','2','3','4'],lbtn:'EN ⇆ 中文'},
+      dh:['1','2','3','4'],lbtn:'EN ⇆ 中文',
+      htitle:'Quick Start',ht1:'1. Create a room or join with a room code.',ht2:'2. After entering, pick a name, then pick a color.',ht3:'3. Names and colors cannot be duplicated.',
+      rtitle:'Room Guide',rt1:'1. Pick a name first, then pick a color.',rt2:'2. Selected shows who owns each color.',rt3:'3. Unselected shows who is still waiting.',
+      rt4:'4. Left click marks a cleared door for everyone.',rt5:'5. Right click is a private wrong-door note.',rt6:'6. The top-right counter shows players online.'},
 };
 function applyLang() {
   const t=T[lang];
@@ -832,6 +861,17 @@ function applyLang() {
   document.getElementById('nlabel').textContent=t.nlabel;
   document.getElementById('selected-title').textContent=t.stitle;
   document.getElementById('unselected-title').textContent=t.utitle;
+  document.getElementById('home-tips-title').textContent=t.htitle;
+  document.getElementById('home-tip-1').textContent=t.ht1;
+  document.getElementById('home-tip-2').textContent=t.ht2;
+  document.getElementById('home-tip-3').textContent=t.ht3;
+  document.getElementById('room-tips-title').textContent=t.rtitle;
+  document.getElementById('room-tip-1').textContent=t.rt1;
+  document.getElementById('room-tip-2').textContent=t.rt2;
+  document.getElementById('room-tip-3').textContent=t.rt3;
+  document.getElementById('room-tip-4').textContent=t.rt4;
+  document.getElementById('room-tip-5').textContent=t.rt5;
+  document.getElementById('room-tip-6').textContent=t.rt6;
   document.querySelectorAll('.dh').forEach((el,i)=>{if(t.dh[i])el.textContent=t.dh[i];});
   document.getElementById('btn-lang').textContent=t.lbtn;
   renderPlayerList();
