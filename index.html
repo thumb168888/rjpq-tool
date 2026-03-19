@@ -347,6 +347,8 @@ input.f::placeholder{color:var(--dim)}
 // ── Config ──────────────────────────────────────────────
 const BROKER  = 'wss://broker.hivemq.com:8884/mqtt';
 const PREFIX  = 'rjpq-tool-v2';
+const HOST_HEARTBEAT_MS = 10000;
+const ROOM_STALE_MS = 30000;
 
 const COLORS  = ['orange','green','blue','pink'];
 const CHX     = {orange:'#ff8c42',green:'#3ddc84',blue:'#4fc3f7',pink:'#f06292'};
@@ -363,6 +365,11 @@ let roomPass   = null;
 let myId       = uid();       // unique client id
 let myColor    = null;
 let myName     = '';
+let isHost     = false;
+let hostId     = null;
+let hostBeatAt = 0;
+let hostHeartbeatTimer = null;
+let hostWatchTimer = null;
 let playerMap  = {};          // peerId → { color, name }
 let hasState   = false;
 let doors      = make10x4();  // [floor][door] = {colors:[], wrongMark:false}
@@ -406,7 +413,58 @@ function pub(event) {
 }
 
 function publishPresence() {
-  pub({ type:'hello', color: myColor || null, name: getActiveName() || '' });
+  pub({ type:'hello', color: myColor || null, name: myName || '' });
+}
+
+function getRoomInfoPayload() {
+  return JSON.stringify({
+    password: roomPass,
+    hostId: myId,
+    created: Date.now(),
+    lastSeen: Date.now(),
+  });
+}
+
+function publishRoomInfo() {
+  if (!client || !roomCode || !isHost) return;
+  client.publish(topicInfo(roomCode), getRoomInfoPayload(), {retain:true, qos:1});
+}
+
+function clearHostTimers() {
+  clearInterval(hostHeartbeatTimer);
+  clearInterval(hostWatchTimer);
+  hostHeartbeatTimer = null;
+  hostWatchTimer = null;
+}
+
+function startHostHeartbeat() {
+  clearHostTimers();
+  hostBeatAt = Date.now();
+  publishRoomInfo();
+  pub({type:'host_ping'});
+  hostHeartbeatTimer = setInterval(() => {
+    hostBeatAt = Date.now();
+    publishRoomInfo();
+    pub({type:'host_ping'});
+  }, HOST_HEARTBEAT_MS);
+}
+
+function expireRoom(msg) {
+  clearHostTimers();
+  doExit(true);
+  showErr('join-err', msg);
+  toast(msg, 3200);
+}
+
+function startHostWatch() {
+  clearInterval(hostWatchTimer);
+  if (isHost || !hostId) return;
+  hostWatchTimer = setInterval(() => {
+    if (!hostBeatAt) return;
+    if (Date.now() - hostBeatAt > ROOM_STALE_MS) {
+      expireRoom(lang==='zh' ? '房主已離線，房間已失效' : 'Host offline. Room expired.');
+    }
+  }, 3000);
 }
 
 // ── Connect to MQTT broker ───────────────────────────────
@@ -419,6 +477,12 @@ function connectMQTT(onReady) {
     clean: true,
     connectTimeout: 12000,
     reconnectPeriod: 0,      // no auto-reconnect for cleaner UX
+    will: roomCode ? {
+      topic: topicEvents(roomCode),
+      payload: JSON.stringify({type:'bye', from: myId}),
+      qos: 0,
+      retain: false,
+    } : undefined,
   });
 
   client.on('connect', () => onReady());
@@ -455,6 +519,13 @@ function handleInfoMsg(raw) {
       doExit(true);
       return;
     }
+    if (!info.hostId || !info.lastSeen || (Date.now() - info.lastSeen > ROOM_STALE_MS)) {
+      showErr('join-err', lang==='zh' ? '房間已失效，請重新建立' : 'Room expired. Create a new room.');
+      doExit(true);
+      return;
+    }
+    hostId = info.hostId || null;
+    hostBeatAt = info.lastSeen || Date.now();
     // Password OK — subscribe to events and enter room
     client.unsubscribe(topicInfo(roomCode));
     client.subscribe(topicEvents(roomCode), {qos:1});
@@ -487,6 +558,11 @@ function handleEvent(ev) {
         players: getPlayers(),
       }), Math.random() * 800 | 0);
     }
+  }
+
+  if (type === 'host_ping' && from === hostId) {
+    hostBeatAt = Date.now();
+    if (!isHost) startHostWatch();
   }
 
   if (type === 'request_state' && hasState) {
@@ -525,12 +601,92 @@ function handleEvent(ev) {
     updateColorDots(); renderPlayerList();
   }
 
+  if (type === 'claim_name' && isHost) {
+    const name = (ev.name || '').trim();
+    if (!name) {
+      pub({type:'claim_reject', to: from, field:'name', reason: lang==='zh' ? '名字不能空白' : 'Name required'});
+      return;
+    }
+    if (isNameTakenByOther(name, from)) {
+      pub({type:'claim_reject', to: from, field:'name', reason: lang==='zh' ? '此名字已被使用' : 'Name taken'});
+      return;
+    }
+    playerMap[from] = {
+      color: playerMap[from]?.color ?? null,
+      name,
+    };
+    pub({type:'player_update', peerId: from, color: playerMap[from].color, name});
+    updatePCount(); updateColorDots(); renderPlayerList();
+  }
+
+  if (type === 'claim_color' && isHost) {
+    const color = ev.color;
+    const name = (ev.name || playerMap[from]?.name || '').trim();
+    if (!COLORS.includes(color)) {
+      pub({type:'claim_reject', to: from, field:'color', reason: lang==='zh' ? '無效顏色' : 'Invalid color'});
+      return;
+    }
+    if (!name) {
+      pub({type:'claim_reject', to: from, field:'name', reason: lang==='zh' ? '請先選名字' : 'Pick a name first'});
+      return;
+    }
+    if (isNameTakenByOther(name, from)) {
+      pub({type:'claim_reject', to: from, field:'name', reason: lang==='zh' ? '此名字已被使用' : 'Name taken'});
+      return;
+    }
+    if (isColorTakenByOther(color, from)) {
+      pub({type:'claim_reject', to: from, field:'color', reason: lang==='zh' ? '此顏色已被使用' : 'Color taken'});
+      return;
+    }
+    playerMap[from] = { color, name };
+    pub({type:'player_update', peerId: from, color, name});
+    updatePCount(); updateColorDots(); renderPlayerList();
+  }
+
+  if (type === 'player_update') {
+    const peerId = ev.peerId;
+    if (!peerId) return;
+    if (peerId === myId) {
+      myName = (ev.name || '').trim();
+      myColor = ev.color ?? null;
+      document.getElementById('name-input').value = myName;
+      document.getElementById('chint').textContent = myColor
+        ? (lang==='zh' ? '已選：' : 'Selected: ') + CNAMES[lang][myColor] + ' · ' + myName
+        : (lang==='zh' ? '尚未選擇' : 'Not selected');
+      syncNameUI();
+      updateColorDots();
+      renderPlayerList();
+      return;
+    }
+    playerMap[peerId] = {
+      color: ev.color ?? null,
+      name: (ev.name || '').trim(),
+    };
+    updatePCount(); updateColorDots(); renderPlayerList();
+  }
+
+  if (type === 'claim_reject' && ev.to === myId) {
+    if (ev.field === 'name') {
+      document.getElementById('name-input').value = myName || '';
+      syncNameUI();
+    }
+    toast(ev.reason || (lang==='zh' ? '申請失敗' : 'Request rejected'));
+    if (ev.field === 'color') {
+      updateColorDots();
+      renderPlayerList();
+    }
+  }
+
   if (type === 'clear_all') {
     doors = make10x4(); renderAll();
     toast(lang==='zh' ? '已清除所有標記' : 'All marks cleared');
   }
 
   if (type === 'bye') {
+    if (!isHost && from === hostId) {
+      expireRoom(lang==='zh' ? '房主已離開，房間已關閉' : 'Host left. Room closed.');
+      return;
+    }
     delete playerMap[from];
     updatePCount(); updateColorDots(); renderPlayerList();
   }
@@ -545,7 +701,7 @@ function desDoors(raw) {
 }
 function getPlayers() {
   const out = {};
-  out[myId] = { color: myColor || null, name: getActiveName() || '' };
+  out[myId] = { color: myColor || null, name: myName || '' };
   Object.entries(playerMap).forEach(([pid,data]) => {
     out[pid] = { color: data?.color || null, name: data?.name || '' };
   });
@@ -562,6 +718,8 @@ function enterRoom() {
   updateColorDots();
   renderPlayerList();
   syncNameUI();
+  if (isHost) startHostHeartbeat();
+  else startHostWatch();
   showScr('room');
 }
 
@@ -573,11 +731,12 @@ function createRoom() {
 
   roomCode = String(100000 + (Math.random() * 900000 | 0));
   roomPass = pass;
+  isHost = true;
+  hostId = myId;
 
   connectMQTT(() => {
     // Publish retained room info
-    const info = JSON.stringify({password: pass, created: Date.now()});
-    client.publish(topicInfo(roomCode), info, {retain:true, qos:1});
+    publishRoomInfo();
     // Subscribe to events
     client.subscribe(topicEvents(roomCode), {qos:1});
     hasState = true;
@@ -596,6 +755,8 @@ function joinRoom() {
 
   roomCode = code;
   roomPass = pass;
+  isHost = false;
+  hostId = null;
 
   connectMQTT(() => {
     // Subscribe to info topic to get retained room info (for password check)
@@ -638,15 +799,29 @@ function onRight(f, d) {
 
 // ── Color pick ───────────────────────────────────────────
 function pickColor(color) {
-  const taken = Object.values(playerMap).some(v => v?.color === color);
-  if (taken && color !== myColor) { toast(lang==='zh'?'此顏色已被使用':'Color taken'); return; }
-  myColor = color;
-  ensureNameSelected();
-  pub({type:'color_pick', color, name: getActiveName()});
-  updateColorDots();
-  document.getElementById('chint').textContent =
-    (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][color] + ' · ' + getActiveName();
-  renderPlayerList();
+  if (isHost) {
+    const taken = isColorTakenByOther(color, myId);
+    if (taken && color !== myColor) { toast(lang==='zh'?'此顏色已被使用':'Color taken'); return; }
+    ensureNameSelected();
+    if (!myName) return;
+    myColor = color;
+    pub({type:'player_update', peerId: myId, color, name: myName});
+    updateColorDots();
+    document.getElementById('chint').textContent =
+      (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][color] + ' · ' + myName;
+    renderPlayerList();
+    return;
+  }
+
+  if (!myName) {
+    const requestedName = getActiveName() || PRESET_NAMES[0];
+    requestNameChange(requestedName);
+    toast(lang==='zh' ? '名字確認後再選顏色' : 'Wait for name approval first');
+    return;
+  }
+
+  pub({type:'claim_color', color, name: myName});
+  toast(lang==='zh' ? '已送出顏色申請' : 'Color request sent');
 }
 
 function updateColorDots() {
@@ -663,25 +838,61 @@ function getActiveName() {
   return document.getElementById('name-input').value.trim();
 }
 
-function isNameTaken(name) {
+function isNameTakenByOther(name, excludeId=null) {
   const target = (name || '').trim();
   if (!target) return false;
-  return Object.values(playerMap).some(v => (v?.name || '').trim() === target);
+  if (excludeId !== myId && (myName || '').trim() === target) return true;
+  return Object.entries(playerMap).some(([pid, v]) =>
+    pid !== excludeId && (v?.name || '').trim() === target
+  );
+}
+
+function isColorTakenByOther(color, excludeId=null) {
+  if (!color) return false;
+  if (excludeId !== myId && myColor === color) return true;
+  return Object.entries(playerMap).some(([pid, v]) =>
+    pid !== excludeId && v?.color === color
+  );
+}
+
+function isNameTaken(name) {
+  return isNameTakenByOther(name, myId);
+}
+
+function requestNameChange(name) {
+  const nextName = (name || '').trim();
+  if (!nextName) {
+    toast(lang==='zh' ? '請先輸入名字' : 'Enter a name first');
+    return;
+  }
+  if (isHost) {
+    if (isNameTakenByOther(nextName, myId)) {
+      toast(lang==='zh' ? '此名字已被使用' : 'Name taken');
+      return;
+    }
+    myName = nextName;
+    document.getElementById('name-input').value = myName;
+    syncNameUI();
+    renderPlayerList();
+    pub({type:'player_update', peerId: myId, color: myColor, name: myName});
+    if (myColor) {
+      document.getElementById('chint').textContent =
+        (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][myColor] + ' · ' + myName;
+    }
+    return;
+  }
+  pub({type:'claim_name', name: nextName});
+  toast(lang==='zh' ? '已送出名字申請' : 'Name request sent');
 }
 
 function ensureNameSelected() {
   const input = document.getElementById('name-input');
-  if (!input.value.trim()) input.value = PRESET_NAMES[0];
-  if (isNameTaken(input.value.trim())) {
-    toast(lang==='zh' ? '此名字已被使用' : 'Name taken');
-    input.value = '';
-  }
-  myName = input.value.trim();
-  syncNameUI();
+  const nextName = input.value.trim() || PRESET_NAMES[0];
+  input.value = nextName;
+  requestNameChange(nextName);
 }
 
 function syncNameUI() {
-  myName = getActiveName();
   document.querySelectorAll('.namechip').forEach(btn => {
     btn.classList.toggle('on', btn.dataset.name === myName);
     btn.classList.toggle('taken', btn.dataset.name !== myName && isNameTaken(btn.dataset.name));
@@ -689,14 +900,8 @@ function syncNameUI() {
 }
 
 function chooseName(name) {
-  if (isNameTaken(name) && name !== getActiveName()) {
-    toast(lang==='zh' ? '此名字已被使用' : 'Name taken');
-    return;
-  }
   document.getElementById('name-input').value = name;
-  syncNameUI();
-  renderPlayerList();
-  publishPresence();
+  requestNameChange(name);
 }
 
 function renderPlayerList() {
@@ -706,10 +911,10 @@ function renderPlayerList() {
 
   const selectedEntries = [];
   const unselectedEntries = [];
-  const myDisplayName = getActiveName() || PRESET_NAMES[0];
+  const myDisplayName = myName || '';
 
-  if (myColor) selectedEntries.push({ color: myColor, name: myDisplayName });
-  else if (getActiveName()) unselectedEntries.push({ name: myDisplayName });
+  if (myColor && myDisplayName) selectedEntries.push({ color: myColor, name: myDisplayName });
+  else if (myDisplayName) unselectedEntries.push({ name: myDisplayName });
 
   Object.values(playerMap).forEach(v => {
     const name = v?.name || (lang==='zh' ? '未命名' : 'Unnamed');
@@ -789,8 +994,7 @@ function renderAll() {
 
 // ── Copy info ─────────────────────────────────────────────
 function copyInfo() {
-  const link = location.hostname === 'localhost'
-    ? location.host : location.hostname;
+  const link = new URL(location.pathname, location.href).toString();
   const txt = `Code: ${roomCode} | Password: ${roomPass} | Link: ${link}`;
   navigator.clipboard.writeText(txt)
     .then(() => toast(lang==='zh'?'✓ 已複製房間資訊':'✓ Copied!'))
@@ -811,12 +1015,18 @@ function doClear() {
 
 // ── Exit ─────────────────────────────────────────────────
 function doExit(silent=false) {
+  clearHostTimers();
   if (client) {
     if (!silent && roomCode) pub({type:'bye'});
+    if (isHost && roomCode) {
+      client.publish(topicInfo(roomCode), '', {retain:true, qos:1});
+    }
     client.end(true);
     client = null;
   }
-  roomCode=null; roomPass=null; myColor=null; myName=''; hasState=false;
+  roomCode=null; roomPass=null; myColor=null; myName=''; isHost=false; hasState=false;
+  hostId=null;
+  hostBeatAt=0;
   playerMap={}; doors=make10x4();
   document.getElementById('join-code').value='';
   document.getElementById('join-pass').value='';
@@ -897,13 +1107,19 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('name-input').addEventListener('input', () => {
     const input = document.getElementById('name-input');
     const value = input.value.trim();
-    if (value && isNameTaken(value) && value !== myName) {
+    if (isHost && value && isNameTaken(value) && value !== myName) {
       toast(lang==='zh' ? '此名字已被使用' : 'Name taken');
       input.value = myName || '';
     }
     syncNameUI();
     renderPlayerList();
-    publishPresence();
+  });
+  document.getElementById('name-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') requestNameChange(e.currentTarget.value);
+  });
+  document.getElementById('name-input').addEventListener('blur', e => {
+    const value = e.currentTarget.value.trim();
+    if (value && value !== myName) requestNameChange(value);
   });
   document.getElementById('btn-copy').addEventListener('click', copyInfo);
   document.getElementById('btn-clear').addEventListener('click', doClear);
