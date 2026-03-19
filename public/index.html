@@ -93,6 +93,7 @@ input.f::placeholder{color:var(--dim)}
 .namechip{background:var(--sur2);border:1px solid var(--brd);color:var(--txt);border-radius:999px;
   padding:5px 10px;font-size:.77rem;cursor:pointer;font-family:inherit;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .namechip.on{border-color:var(--teal);color:var(--teal)}
+.namechip.taken{opacity:.4;cursor:not-allowed}
 .plist-wrap{display:flex;flex-direction:column;gap:10px;width:100%}
 .plist-block{display:flex;flex-direction:column;gap:6px}
 .plist-title{font-size:.72rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
@@ -282,6 +283,7 @@ input.f::placeholder{color:var(--dim)}
         <button class="namechip" type="button" data-name="文大">文大</button>
         <button class="namechip" type="button" data-name="TZE">TZE</button>
         <button class="namechip" type="button" data-name="Jeffrey">Jeffrey</button>
+        <button class="namechip" type="button" data-name="訪客">訪客</button>
       </div>
       <div class="plist-wrap">
         <div class="plist-block">
@@ -341,7 +343,7 @@ let myName     = '';
 let playerMap  = {};          // peerId → { color, name }
 let hasState   = false;
 let doors      = make10x4();  // [floor][door] = {colors:[], wrongMark:false}
-const PRESET_NAMES = ['芬妮','小塏','文大','TZE','Jeffrey'];
+const PRESET_NAMES = ['芬妮','小塏','文大','TZE','Jeffrey','訪客'];
 
 function uid() {
   return Math.random().toString(36).slice(2,10).toUpperCase();
@@ -638,9 +640,19 @@ function getActiveName() {
   return document.getElementById('name-input').value.trim();
 }
 
+function isNameTaken(name) {
+  const target = (name || '').trim();
+  if (!target) return false;
+  return Object.values(playerMap).some(v => (v?.name || '').trim() === target);
+}
+
 function ensureNameSelected() {
   const input = document.getElementById('name-input');
   if (!input.value.trim()) input.value = PRESET_NAMES[0];
+  if (isNameTaken(input.value.trim())) {
+    toast(lang==='zh' ? '此名字已被使用' : 'Name taken');
+    input.value = '';
+  }
   myName = input.value.trim();
   syncNameUI();
 }
@@ -649,10 +661,15 @@ function syncNameUI() {
   myName = getActiveName();
   document.querySelectorAll('.namechip').forEach(btn => {
     btn.classList.toggle('on', btn.dataset.name === myName);
+    btn.classList.toggle('taken', btn.dataset.name !== myName && isNameTaken(btn.dataset.name));
   });
 }
 
 function chooseName(name) {
+  if (isNameTaken(name) && name !== getActiveName()) {
+    toast(lang==='zh' ? '此名字已被使用' : 'Name taken');
+    return;
+  }
   document.getElementById('name-input').value = name;
   syncNameUI();
   renderPlayerList();
@@ -837,6 +854,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }, { passive: false });
   });
   document.getElementById('name-input').addEventListener('input', () => {
+    const input = document.getElementById('name-input');
+    const value = input.value.trim();
+    if (value && isNameTaken(value) && value !== myName) {
+      toast(lang==='zh' ? '此名字已被使用' : 'Name taken');
+      input.value = myName || '';
+    }
     syncNameUI();
     renderPlayerList();
     publishPresence();
