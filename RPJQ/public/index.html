@@ -72,17 +72,33 @@ input.f::placeholder{color:var(--dim)}
 .sdot.ok{background:var(--teal)}.sdot.warn{background:var(--yellow)}
 /* Color row */
 .crow{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
-.cdots{display:flex;gap:9px}
+.cdots{display:flex;gap:9px;padding-top:14px}
 .cdot{width:28px;height:28px;border-radius:50%;background:var(--c);border:3px solid transparent;
-  cursor:pointer;transition:transform .15s,border-color .15s,opacity .15s;opacity:.4;position:relative}
+  cursor:pointer;transition:transform .15s,border-color .15s,opacity .15s;opacity:.4;position:relative;overflow:visible}
 .cdot:hover{transform:scale(1.1);opacity:.75}
 .cdot.sel{border-color:#fff;opacity:1;transform:scale(1.15)}
-.cdot.sel::before{content:'▲';position:absolute;left:50%;top:-14px;transform:translateX(-50%);
-  color:#fff;font-size:.72rem;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.cdot.sel::before{content:'▲';position:absolute;left:50%;top:-16px;transform:translateX(-50%);
+  color:#fff;font-size:.8rem;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.6);z-index:2}
 .cdot.taken{opacity:.15;cursor:not-allowed}
 .cdot.taken::after{content:'✕';position:absolute;inset:0;display:flex;align-items:center;
   justify-content:center;color:rgba(255,255,255,.6);font-size:.7rem}
 .chint{font-size:.76rem;color:var(--dim)}
+.namebox{width:100%;display:flex;flex-direction:column;gap:8px}
+.name-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.nlabel{font-size:.72rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+.nameinput{flex:1;min-width:140px;background:var(--sur2);border:1px solid var(--brd);border-radius:var(--rs);
+  color:var(--txt);font-size:.85rem;padding:7px 10px;outline:none;font-family:inherit}
+.nameinput:focus{border-color:var(--teal)}
+.namechips{display:flex;gap:7px;flex-wrap:wrap}
+.namechip{background:var(--sur2);border:1px solid var(--brd);color:var(--txt);border-radius:999px;
+  padding:5px 10px;font-size:.77rem;cursor:pointer;font-family:inherit}
+.namechip.on{border-color:var(--teal);color:var(--teal)}
+.plist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
+.pitem{display:flex;align-items:center;gap:7px;background:rgba(255,255,255,.03);border:1px solid var(--brd);
+  border-radius:var(--rs);padding:6px 8px;font-size:.76rem;color:var(--txt);min-height:34px}
+.pitem.empty{color:var(--dim)}
+.pswatch{width:12px;height:12px;border-radius:50%;flex-shrink:0;background:var(--c)}
+.pname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Grid */
 .gwrap{background:var(--sur2);border:1px solid var(--brd);border-radius:var(--r);overflow:hidden;margin-bottom:10px}
 .ghdr{display:grid;grid-template-columns:36px repeat(4,1fr);background:#0f0f1a;padding:5px 8px;gap:3px}
@@ -252,6 +268,20 @@ input.f::placeholder{color:var(--dim)}
       <button class="cdot" data-color="pink"   style="--c:var(--pink)"   title="粉色"></button>
     </div>
     <span class="chint" id="chint">尚未選擇</span>
+    <div class="namebox">
+      <div class="name-head">
+        <span class="nlabel" id="nlabel">名字</span>
+        <input class="nameinput" id="name-input" placeholder="輸入名字 / Your name" maxlength="20"/>
+      </div>
+      <div class="namechips" id="namechips">
+        <button class="namechip" type="button" data-name="芬妮">芬妮</button>
+        <button class="namechip" type="button" data-name="小塏">小塏</button>
+        <button class="namechip" type="button" data-name="文大">文大</button>
+        <button class="namechip" type="button" data-name="TZE">TZE</button>
+        <button class="namechip" type="button" data-name="Jeffrey">Jeffrey</button>
+      </div>
+      <div class="plist" id="plist"></div>
+    </div>
   </div>
 
   <div class="gwrap">
@@ -295,10 +325,12 @@ let roomCode   = null;
 let roomPass   = null;
 let myId       = uid();       // unique client id
 let myColor    = null;
-let playerMap  = {};          // peerId → color
+let myName     = '';
+let playerMap  = {};          // peerId → { color, name }
 let hasState   = false;
 let doors      = make10x4();  // [floor][door] = {colors:[], wrongMark:false}
 let onlineCount = 1;
+const PRESET_NAMES = ['芬妮','小塏','文大','TZE','Jeffrey'];
 
 function uid() {
   return Math.random().toString(36).slice(2,10).toUpperCase();
@@ -402,9 +434,9 @@ function handleEvent(ev) {
   if (from === myId) return; // ignore own messages
 
   if (type === 'hello') {
-    playerMap[from] = playerMap[from] || null;
+    playerMap[from] = playerMap[from] || { color: null, name: '' };
     onlineCount = Object.keys(playerMap).length + 1;
-    updatePCount();
+    updatePCount(); updateColorDots(); renderPlayerList();
     // If we have state, respond to help the newcomer
     if (hasState) {
       setTimeout(() => pub({
@@ -428,10 +460,13 @@ function handleEvent(ev) {
     renderAll();
     // Restore others' colors
     if (ev.playerColors) {
-      Object.entries(ev.playerColors).forEach(([pid,col]) => { playerMap[pid] = col; });
+      Object.entries(ev.playerColors).forEach(([pid,data]) => {
+        if (typeof data === 'string') playerMap[pid] = { color: data, name: '' };
+        else playerMap[pid] = { color: data?.color || null, name: data?.name || '' };
+      });
     }
     onlineCount = Object.keys(playerMap).length + 1;
-    updatePCount(); updateColorDots();
+    updatePCount(); updateColorDots(); renderPlayerList();
     hasState = true;
   }
 
@@ -444,8 +479,8 @@ function handleEvent(ev) {
   }
 
   if (type === 'color_pick') {
-    playerMap[from] = ev.color;
-    updateColorDots();
+    playerMap[from] = { color: ev.color, name: ev.name || '' };
+    updateColorDots(); renderPlayerList();
   }
 
   if (type === 'clear_all') {
@@ -456,7 +491,7 @@ function handleEvent(ev) {
   if (type === 'bye') {
     delete playerMap[from];
     onlineCount = Object.keys(playerMap).length + 1;
-    updatePCount(); updateColorDots();
+    updatePCount(); updateColorDots(); renderPlayerList();
   }
 }
 
@@ -469,7 +504,9 @@ function desDoors(raw) {
 }
 function getColors() {
   const out = {};
-  Object.entries(playerMap).forEach(([pid,col]) => { if(col) out[pid] = col; });
+  Object.entries(playerMap).forEach(([pid,data]) => {
+    if (data?.color) out[pid] = { color: data.color, name: data.name || '' };
+  });
   return out;
 }
 
@@ -481,6 +518,8 @@ function enterRoom() {
   buildGrid();
   updatePCount();
   updateColorDots();
+  renderPlayerList();
+  syncNameUI();
   showScr('room');
 }
 
@@ -557,23 +596,61 @@ function onRight(f, d) {
 
 // ── Color pick ───────────────────────────────────────────
 function pickColor(color) {
-  const taken = Object.values(playerMap).includes(color);
+  const taken = Object.values(playerMap).some(v => v?.color === color);
   if (taken && color !== myColor) { toast(lang==='zh'?'此顏色已被使用':'Color taken'); return; }
   myColor = color;
-  pub({type:'color_pick', color});
+  ensureNameSelected();
+  pub({type:'color_pick', color, name: getActiveName()});
   updateColorDots();
   document.getElementById('chint').textContent =
-    (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][color];
+    (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][color] + ' · ' + getActiveName();
+  renderPlayerList();
 }
 
 function updateColorDots() {
-  const takenColors = new Set(Object.values(playerMap));
+  const takenColors = new Set(Object.values(playerMap).map(v => v?.color).filter(Boolean));
   document.querySelectorAll('.cdot').forEach(dot => {
     const c = dot.dataset.color;
     dot.classList.remove('sel','taken');
     if (c === myColor) dot.classList.add('sel');
     else if (takenColors.has(c)) dot.classList.add('taken');
   });
+}
+
+function getActiveName() {
+  return document.getElementById('name-input').value.trim();
+}
+
+function ensureNameSelected() {
+  const input = document.getElementById('name-input');
+  if (!input.value.trim()) input.value = PRESET_NAMES[0];
+  myName = input.value.trim();
+  syncNameUI();
+}
+
+function syncNameUI() {
+  myName = getActiveName();
+  document.querySelectorAll('.namechip').forEach(btn => {
+    btn.classList.toggle('on', btn.dataset.name === myName);
+  });
+}
+
+function renderPlayerList() {
+  const list = document.getElementById('plist');
+  if (!list) return;
+  const entries = [];
+  if (myColor) entries.push({ color: myColor, name: getActiveName() || PRESET_NAMES[0] });
+  Object.values(playerMap).forEach(v => { if (v?.color) entries.push({ color: v.color, name: v.name || '未命名' }); });
+  const unique = entries.filter((item, idx) =>
+    idx === entries.findIndex(other => other.color === item.color)
+  );
+  if (!unique.length) {
+    list.innerHTML = `<div class="pitem empty">${lang==='zh'?'尚未有人選色':'No color selected yet'}</div>`;
+    return;
+  }
+  list.innerHTML = unique.map(item =>
+    `<div class="pitem"><span class="pswatch" style="--c:${CHX[item.color]}"></span><span class="pname">${CNAMES[lang][item.color]} · ${item.name}</span></div>`
+  ).join('');
 }
 
 function updatePCount() {
@@ -654,12 +731,15 @@ function doExit(silent=false) {
     client.end(true);
     client = null;
   }
-  roomCode=null; roomPass=null; myColor=null; hasState=false;
+  roomCode=null; roomPass=null; myColor=null; myName=''; hasState=false;
   playerMap={}; doors=make10x4(); onlineCount=1;
   document.getElementById('join-code').value='';
   document.getElementById('join-pass').value='';
   document.getElementById('create-pass').value='';
+  document.getElementById('name-input').value='';
   document.getElementById('chint').textContent = lang==='zh'?'尚未選擇':'Not selected';
+  renderPlayerList();
+  syncNameUI();
   clearErr('join-err'); clearErr('create-err');
   showScr('home');
 }
@@ -668,11 +748,11 @@ function doExit(silent=false) {
 const T={
   zh:{jlbl:'加入房間',jph1:'房間號碼',jph2:'密碼',jbtn:'進入',
       clbl2:'建立房間',cph:'設定密碼',cbtn:'建立',
-      clrl:'選擇顏色：',chint:'尚未選擇',
+      clrl:'選擇顏色：',chint:'尚未選擇',nlabel:'名字',
       dh:['1','2','3','4'],lbtn:'中文 ⇆ EN'},
   en:{jlbl:'Join Room',jph1:'Room Code',jph2:'Password',jbtn:'Access',
       clbl2:'Create Room',cph:'Set Password',cbtn:'Create',
-      clrl:'Pick color:',chint:'Not selected',
+      clrl:'Pick color:',chint:'Not selected',nlabel:'Name',
       dh:['1','2','3','4'],lbtn:'EN ⇆ 中文'},
 };
 function applyLang() {
@@ -686,9 +766,11 @@ function applyLang() {
   document.getElementById('create-pass').placeholder=t.cph;
   document.getElementById('btn-create').textContent=t.cbtn;
   document.getElementById('clbl').textContent=t.clrl;
-  document.getElementById('chint').textContent=t.chint;
+  if (!myColor) document.getElementById('chint').textContent=t.chint;
+  document.getElementById('nlabel').textContent=t.nlabel;
   document.querySelectorAll('.dh').forEach((el,i)=>{if(t.dh[i])el.textContent=t.dh[i];});
   document.getElementById('btn-lang').textContent=t.lbtn;
+  renderPlayerList();
 }
 
 // ── Boot ──────────────────────────────────────────────────
@@ -700,12 +782,23 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('create-pass').addEventListener('keydown', e => { if(e.key==='Enter') createRoom(); });
   document.querySelectorAll('.cdot').forEach(dot =>
     dot.addEventListener('click', ()=>pickColor(dot.dataset.color)));
+  document.querySelectorAll('.namechip').forEach(btn =>
+    btn.addEventListener('click', () => {
+      document.getElementById('name-input').value = btn.dataset.name;
+      syncNameUI();
+      renderPlayerList();
+    }));
+  document.getElementById('name-input').addEventListener('input', () => {
+    syncNameUI();
+    renderPlayerList();
+  });
   document.getElementById('btn-copy').addEventListener('click', copyInfo);
   document.getElementById('btn-clear').addEventListener('click', doClear);
   document.getElementById('btn-exit').addEventListener('click', ()=>doExit(false));
   document.getElementById('btn-lang').addEventListener('click', ()=>{
     lang = lang==='zh'?'en':'zh'; applyLang();
   });
+  renderPlayerList();
 });
 </script>
 </body>
