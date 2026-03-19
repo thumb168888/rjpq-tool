@@ -334,10 +334,6 @@ input.f::placeholder{color:var(--dim)}
       <div class="tips-item" id="room-tip-6">6. 右上角會顯示目前在線人數。</div>
     </div>
   </div>
-  <div class="log">
-    <div class="tips-title" id="room-log-title">房間紀錄</div>
-    <div class="log-list" id="room-log"></div>
-  </div>
 </div>
 
 </div><!-- /room-wrap -->
@@ -378,7 +374,6 @@ let hostId     = null;
 let hostBeatAt = 0;
 let hostHeartbeatTimer = null;
 let hostWatchTimer = null;
-let roomLog    = [];
 let playerMap  = {};          // peerId → { color, name }
 let hasState   = false;
 let doors      = make10x4();  // [floor][door] = {colors:[], wrongMark:false}
@@ -400,34 +395,6 @@ function toast(msg, ms=2200) {
   el.textContent = msg; el.classList.add('show');
   clearTimeout(el._t);
   el._t = setTimeout(() => el.classList.remove('show'), ms);
-}
-
-function fmtTime(ts=Date.now()) {
-  return new Date(ts).toLocaleTimeString('zh-TW', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
-
-function renderRoomLog() {
-  const el = document.getElementById('room-log');
-  if (!el) return;
-  el.innerHTML = roomLog.length
-    ? roomLog.map(item => `<div class="log-item">[${item.time}] <strong>${item.name}</strong>${item.action}</div>`).join('')
-    : `<div class="log-item">${lang==='zh' ? '目前沒有紀錄' : 'No activity yet'}</div>`;
-  el.scrollTop = 0;
-}
-
-function pushRoomLog(name, action, ts=Date.now()) {
-  roomLog.unshift({
-    name: name || (lang==='zh' ? '未命名' : 'Unnamed'),
-    action,
-    time: fmtTime(ts),
-  });
-  roomLog = roomLog.slice(0, 30);
-  renderRoomLog();
 }
 
 // ── Screen helpers ───────────────────────────────────────
@@ -584,15 +551,11 @@ function handleEvent(ev) {
   if (from === myId) return; // ignore own messages
 
   if (type === 'hello') {
-    const existed = Boolean(playerMap[from]);
     playerMap[from] = {
       color: ev.color ?? playerMap[from]?.color ?? null,
       name: ev.name ?? playerMap[from]?.name ?? '',
     };
     updatePCount(); updateColorDots(); renderPlayerList();
-    if (!existed) {
-      pushRoomLog(playerMap[from].name || (lang==='zh' ? '未命名' : 'Unnamed'), lang==='zh' ? ' 進入房間' : ' joined the room', ev.joinedAt || Date.now());
-    }
     // If we have state, respond to help the newcomer
     if (hasState) {
       setTimeout(() => pub({
@@ -727,11 +690,9 @@ function handleEvent(ev) {
 
   if (type === 'bye') {
     if (!isHost && from === hostId) {
-      pushRoomLog(playerMap[from]?.name || (lang==='zh' ? '房主' : 'Host'), lang==='zh' ? ' 離開房間' : ' left the room');
       expireRoom(lang==='zh' ? '房主已離開，房間已關閉' : 'Host left. Room closed.');
       return;
     }
-    pushRoomLog(playerMap[from]?.name || (lang==='zh' ? '未命名' : 'Unnamed'), lang==='zh' ? ' 離開房間' : ' left the room');
     delete playerMap[from];
     updatePCount(); updateColorDots(); renderPlayerList();
   }
@@ -763,8 +724,6 @@ function enterRoom() {
   updateColorDots();
   renderPlayerList();
   syncNameUI();
-  renderRoomLog();
-  pushRoomLog(lang==='zh' ? '你' : 'You', lang==='zh' ? ' 進入房間' : ' joined the room');
   if (isHost) startHostHeartbeat();
   else startHostWatch();
   showScr('room');
@@ -1074,7 +1033,6 @@ function doExit(silent=false) {
   roomCode=null; roomPass=null; myColor=null; myName=''; isHost=false; hasState=false;
   hostId=null;
   hostBeatAt=0;
-  roomLog=[];
   playerMap={}; doors=make10x4();
   document.getElementById('join-code').value='';
   document.getElementById('join-pass').value='';
@@ -1083,7 +1041,6 @@ function doExit(silent=false) {
   document.getElementById('chint').textContent = lang==='zh'?'尚未選擇':'Not selected';
   renderPlayerList();
   syncNameUI();
-  renderRoomLog();
   clearErr('join-err'); clearErr('create-err');
   showScr('home');
 }
@@ -1095,7 +1052,6 @@ const T={
       clrl:'選擇顏色：',chint:'尚未選擇',nlabel:'名字',stitle:'已選名單',utitle:'未選名單',
       dh:['1','2','3','4'],lbtn:'中文 ⇆ EN',
       htitle:'使用說明',ht1:'1. 建立房間或輸入房號加入。',ht2:'2. 進房後先選名字，再選顏色。',ht3:'3. 顏色與名字都不能重複。',
-      logTitle:'房間紀錄',
       rtitle:'房內說明',rt1:'1. 先選名字，再選顏色。',rt2:'2. 已選名單可看誰拿哪個顏色。',rt3:'3. 未選名單可看誰還沒選色。',
       rt4:'4. 左鍵標記通過門，會同步給隊友。',rt5:'5. 右鍵是私人錯誤記錄，只自己看得到。',rt6:'6. 右上角會顯示目前在線人數。'},
   en:{jlbl:'Join Room',jph1:'Room Code',jph2:'Password',jbtn:'Access',
@@ -1103,7 +1059,6 @@ const T={
       clrl:'Pick color:',chint:'Not selected',nlabel:'Name',stitle:'Selected',utitle:'Unselected',
       dh:['1','2','3','4'],lbtn:'EN ⇆ 中文',
       htitle:'Quick Start',ht1:'1. Create a room or join with a room code.',ht2:'2. After entering, pick a name, then pick a color.',ht3:'3. Names and colors cannot be duplicated.',
-      logTitle:'Room Log',
       rtitle:'Room Guide',rt1:'1. Pick a name first, then pick a color.',rt2:'2. Selected shows who owns each color.',rt3:'3. Unselected shows who is still waiting.',
       rt4:'4. Left click marks a cleared door for everyone.',rt5:'5. Right click is a private wrong-door note.',rt6:'6. The top-right counter shows players online.'},
 };
@@ -1127,7 +1082,6 @@ function applyLang() {
   document.getElementById('home-tip-2').textContent=t.ht2;
   document.getElementById('home-tip-3').textContent=t.ht3;
   document.getElementById('room-tips-title').textContent=t.rtitle;
-  document.getElementById('room-log-title').textContent=t.logTitle;
   document.getElementById('room-tip-1').textContent=t.rt1;
   document.getElementById('room-tip-2').textContent=t.rt2;
   document.getElementById('room-tip-3').textContent=t.rt3;
@@ -1137,7 +1091,6 @@ function applyLang() {
   document.querySelectorAll('.dh').forEach((el,i)=>{if(t.dh[i])el.textContent=t.dh[i];});
   document.getElementById('btn-lang').textContent=t.lbtn;
   renderPlayerList();
-  renderRoomLog();
 }
 
 // ── Boot ──────────────────────────────────────────────────
