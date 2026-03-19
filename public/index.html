@@ -715,7 +715,8 @@ function renderPlayerList() {
 }
 
 function updatePCount() {
-  document.getElementById('pcount').textContent = '👤 ' + (Object.keys(playerMap).length + 1);
+  const ids = new Set([myId, ...Object.keys(playerMap)]);
+  document.getElementById('pcount').textContent = '👤 ' + ids.size;
 }
 
 // ── Grid ─────────────────────────────────────────────────
