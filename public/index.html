@@ -513,6 +513,7 @@ function desDoors(raw) {
 }
 function getPlayers() {
   const out = {};
+  out[myId] = { color: myColor || null, name: getActiveName() || '' };
   Object.entries(playerMap).forEach(([pid,data]) => {
     out[pid] = { color: data?.color || null, name: data?.name || '' };
   });
