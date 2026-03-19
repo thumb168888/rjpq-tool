@@ -380,6 +380,10 @@ function pub(event) {
   client.publish(topicEvents(roomCode), JSON.stringify({...event, from: myId}), {qos:0});
 }
 
+function publishPresence() {
+  pub({ type:'hello', color: myColor || null, name: getActiveName() || '' });
+}
+
 // ── Connect to MQTT broker ───────────────────────────────
 function connectMQTT(onReady) {
   const cid = 'rjpq_' + myId + '_' + Date.now();
@@ -431,7 +435,7 @@ function handleInfoMsg(raw) {
     client.subscribe(topicEvents(roomCode), {qos:1});
     enterRoom();
     // Announce and request state
-    pub({type:'hello'});
+    publishPresence();
     pub({type:'request_state'});
   } catch {
     showErr('join-err', lang==='zh' ? '無法解析房間資訊' : 'Failed to parse room info');
@@ -445,7 +449,10 @@ function handleEvent(ev) {
   if (from === myId) return; // ignore own messages
 
   if (type === 'hello') {
-    playerMap[from] = playerMap[from] || { color: null, name: '' };
+    playerMap[from] = {
+      color: ev.color ?? playerMap[from]?.color ?? null,
+      name: ev.name ?? playerMap[from]?.name ?? '',
+    };
     updatePCount(); updateColorDots(); renderPlayerList();
     // If we have state, respond to help the newcomer
     if (hasState) {
@@ -550,7 +557,7 @@ function createRoom() {
     client.subscribe(topicEvents(roomCode), {qos:1});
     hasState = true;
     enterRoom();
-    pub({type:'hello'});
+    publishPresence();
   });
 }
 
@@ -649,6 +656,7 @@ function chooseName(name) {
   document.getElementById('name-input').value = name;
   syncNameUI();
   renderPlayerList();
+  publishPresence();
 }
 
 function renderPlayerList() {
@@ -684,7 +692,7 @@ function renderPlayerList() {
 
   unselectedList.innerHTML = uniqueUnselected.length
     ? uniqueUnselected.map(item =>
-        `<div class="pitem"><span class="pname">${item.name}</span></div>`
+        `<div class="pitem"><span class="pname">${item.name || (lang==='zh' ? '未命名' : 'Unnamed')}</span></div>`
       ).join('')
     : `<div class="pitem empty">${lang==='zh'?'目前沒有人未選':'No pending players'}</div>`;
 }
@@ -831,6 +839,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('name-input').addEventListener('input', () => {
     syncNameUI();
     renderPlayerList();
+    publishPresence();
   });
   document.getElementById('btn-copy').addEventListener('click', copyInfo);
   document.getElementById('btn-clear').addEventListener('click', doClear);
