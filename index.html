@@ -10,7 +10,7 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0a0a0f;--sur:#13131d;--sur2:#1c1c2e;--brd:#2a2a42; 
+  --bg:#0a0a0f;--sur:#13131d;--sur2:#1c1c2e;--brd:#2a2a42;
   --teal:#00c9a7;--yellow:#ffd166;--red:#ef476f;
   --txt:#e8e8f0;--dim:#7a7a9a;--r:11px;--rs:7px;
   --orange:#ff8c42;--green:#3ddc84;--blue:#4fc3f7;--pink:#f06292;
@@ -97,6 +97,23 @@ input.f::placeholder{color:var(--dim)}
 .pip{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .dbtn.wr::after{content:'✕';position:absolute;top:1px;right:3px;font-size:.58rem;color:var(--red);opacity:.8}
 .leg{font-size:.7rem;color:var(--dim);text-align:center;margin-bottom:4px}
+/* Guide panel */
+.room-wrap{display:flex;gap:14px;align-items:flex-start;width:100%;max-width:860px;justify-content:center}
+.guide{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);
+  padding:18px 14px;width:200px;flex-shrink:0;box-shadow:0 8px 40px rgba(0,0,0,.55)}
+.guide-title{font-size:.78rem;font-weight:700;color:var(--teal);letter-spacing:.06em;
+  text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.stage{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--brd)}
+.stage:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
+.stage-hd{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.stage-num{background:var(--teal);color:#000;font-size:.62rem;font-weight:700;
+  border-radius:4px;padding:1px 6px;flex-shrink:0}
+.stage-name{font-size:.78rem;font-weight:600;color:var(--txt)}
+.stage-cond{font-size:.72rem;color:var(--dim);margin-top:2px;line-height:1.5}
+.perf{display:inline-flex;align-items:center;gap:3px;background:rgba(255,209,102,.1);
+  border:1px solid rgba(255,209,102,.35);border-radius:4px;
+  color:var(--yellow);font-size:.68rem;font-weight:600;padding:1px 6px;margin-top:3px}
+@media(max-width:700px){.room-wrap{flex-direction:column;align-items:center}.guide{width:100%;max-width:530px}}
 /* Toast */
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);
   background:var(--sur2);border:1px solid var(--teal);color:var(--teal);
@@ -148,6 +165,45 @@ input.f::placeholder{color:var(--dim)}
 
 <!-- ═══ ROOM ═══ -->
 <div id="room-scr" class="scr">
+<div class="room-wrap">
+
+<!-- ── 通關指南 ── -->
+<div class="guide">
+  <div class="guide-title">🗺 通關指南</div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">1F</span><span class="stage-name">找信 + 機關</span></div>
+    <div class="perf">⭐ 完美① 找信</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">2F</span><span class="stage-name">清怪</span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">3F</span><span class="stage-name">把水倒滿</span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">4F</span><span class="stage-name">找資料 + 交信給NPC</span></div>
+    <div class="perf">⭐ 完美② 交信給NPC</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">5F</span><span class="stage-name">不碰NPC + 清怪</span></div>
+    <div class="perf">⭐ 完美③ 不碰NPC</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">6F</span><span class="stage-name">四個房間跳跳</span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-hd"><span class="stage-num">7F</span><span class="stage-name">打王</span></div>
+  </div>
+</div>
+
+<!-- ── 房間 ── -->
 <div class="card room-card">
 
   <div class="topbar">
@@ -188,8 +244,13 @@ input.f::placeholder{color:var(--dim)}
   </div>
   <div class="leg">左鍵：標記通過（共享）｜右鍵：私人錯誤記錄</div>
 </div>
+
+</div><!-- /room-wrap -->
 </div>
 
+<div class="toast" id="toast"></div>
+
+<script>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -229,8 +290,8 @@ function make10x4() {
   return Array.from({length:10}, () =>
     Array.from({length:4}, () => ({colors:[], wrongMark:false})));
 }
-function topicInfo(c)   { return `${PREFIX}/${c}/info`; }
-function topicEvents(c) { return `${PREFIX}/${c}/events`; }
+function topicInfo(c)   { return \`\${PREFIX}/\${c}/info\`; }
+function topicEvents(c) { return \`\${PREFIX}/\${c}/events\`; }
 
 // ── Toast ────────────────────────────────────────────────
 function toast(msg, ms=2200) {
@@ -445,7 +506,7 @@ function joinRoom() {
 
     // Timeout if no retained message (room doesn't exist)
     const timer = setTimeout(() => {
-      showErr('join-err', lang==='zh' ? `找不到房間 ${code}，請確認房號` : `Room ${code} not found`);
+      showErr('join-err', lang==='zh' ? \`找不到房間 \${code}，請確認房號\` : \`Room \${code} not found\`);
       doExit(true);
     }, 6000);
 
@@ -511,7 +572,7 @@ function buildGrid() {
     row.appendChild(lbl);
     for (let d=0; d<4; d++) {
       const btn = document.createElement('button');
-      btn.className = 'dbtn'; btn.id = `d${f}_${d}`;
+      btn.className = 'dbtn'; btn.id = \`d\${f}_\${d}\`;
       btn.addEventListener('click', ()=>onLeft(f,d));
       btn.addEventListener('contextmenu', e=>{e.preventDefault();onRight(f,d);});
       row.appendChild(btn);
@@ -521,7 +582,7 @@ function buildGrid() {
   renderAll();
 }
 function renderDoor(f, d, el) {
-  const btn = el || document.getElementById(`d${f}_${d}`); if(!btn) return;
+  const btn = el || document.getElementById(\`d\${f}_\${d}\`); if(!btn) return;
   const {colors, wrongMark} = doors[f][d];
   btn.innerHTML = '';
   if (colors.length) {
@@ -546,7 +607,7 @@ function renderAll() {
 function copyInfo() {
   const link = location.hostname === 'localhost'
     ? location.host : location.hostname;
-  const txt = `Code: ${roomCode} | Password: ${roomPass} | Link: ${link}`;
+  const txt = \`Code: \${roomCode} | Password: \${roomPass} | Link: \${link}\`;
   navigator.clipboard.writeText(txt)
     .then(() => toast(lang==='zh'?'✓ 已複製房間資訊':'✓ Copied!'))
     .catch(() => {
