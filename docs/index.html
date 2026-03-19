@@ -72,13 +72,13 @@ input.f::placeholder{color:var(--dim)}
 .sdot.ok{background:var(--teal)}.sdot.warn{background:var(--yellow)}
 /* Color row */
 .crow{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
-.cdots{display:flex;gap:9px}
+.cdots{display:flex;gap:9px;padding-top:14px}
 .cdot{width:28px;height:28px;border-radius:50%;background:var(--c);border:3px solid transparent;
-  cursor:pointer;transition:transform .15s,border-color .15s,opacity .15s;opacity:.4;position:relative}
+  cursor:pointer;transition:transform .15s,border-color .15s,opacity .15s;opacity:.4;position:relative;overflow:visible}
 .cdot:hover{transform:scale(1.1);opacity:.75}
 .cdot.sel{border-color:#fff;opacity:1;transform:scale(1.15)}
-.cdot.sel::before{content:'▲';position:absolute;left:50%;top:-14px;transform:translateX(-50%);
-  color:#fff;font-size:.72rem;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.cdot.sel::before{content:'▲';position:absolute;left:50%;top:-16px;transform:translateX(-50%);
+  color:#fff;font-size:.8rem;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.6);z-index:2}
 .cdot.taken{opacity:.15;cursor:not-allowed}
 .cdot.taken::after{content:'✕';position:absolute;inset:0;display:flex;align-items:center;
   justify-content:center;color:rgba(255,255,255,.6);font-size:.7rem}
