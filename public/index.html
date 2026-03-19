@@ -597,7 +597,6 @@ function handleEvent(ev) {
         type:'full_state',
         doors: serDoors(),
         players: getPlayers(),
-        roomLog,
       }), Math.random() * 800 | 0);
     }
   }
@@ -612,7 +611,6 @@ function handleEvent(ev) {
       type:'full_state',
       doors: serDoors(),
       players: getPlayers(),
-      roomLog,
     }), Math.random() * 800 | 0);
   }
 
@@ -626,10 +624,6 @@ function handleEvent(ev) {
         if (typeof data === 'string') playerMap[pid] = { color: data, name: '' };
         else playerMap[pid] = { color: data?.color || null, name: data?.name || '' };
       });
-    }
-    if (Array.isArray(ev.roomLog)) {
-      roomLog = ev.roomLog.slice(0, 30);
-      renderRoomLog();
     }
     updatePCount(); updateColorDots(); renderPlayerList();
     hasState = true;
