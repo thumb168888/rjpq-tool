@@ -556,13 +556,15 @@ function handleInfoMsg(raw) {
       doExit(true);
       return;
     }
-    if (!info.hostId || !info.lastSeen || (Date.now() - info.lastSeen > ROOM_STALE_MS)) {
+    const infoSeenAt = info.lastSeen || info.created || 0;
+    const isLegacyRoom = !info.hostId || !info.lastSeen;
+    if (!isLegacyRoom && infoSeenAt && (Date.now() - infoSeenAt > ROOM_STALE_MS)) {
       showErr('join-err', lang==='zh' ? '房間已失效，請重新建立' : 'Room expired. Create a new room.');
       doExit(true);
       return;
     }
     hostId = info.hostId || null;
-    hostBeatAt = info.lastSeen || Date.now();
+    hostBeatAt = infoSeenAt || Date.now();
     // Password OK — subscribe to events and enter room
     client.unsubscribe(topicInfo(roomCode));
     client.subscribe(topicEvents(roomCode), {qos:1});
