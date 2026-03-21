@@ -125,11 +125,13 @@ input.f::placeholder{color:var(--dim)}
   gap:3px;transition:border-color .15s,background .15s;overflow:hidden;user-select:none}
 .dbtn:hover{border-color:var(--teal)}
 .dbtn.mk{border-color:transparent}
+.dbtn:disabled{cursor:not-allowed;opacity:.45}
 .dnum{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:.72rem;font-weight:700;color:rgba(232,232,240,.42);pointer-events:none}
 .pip{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .dbtn.wr::after{content:'✕';position:absolute;top:1px;right:3px;font-size:.58rem;color:var(--red);opacity:.8}
 .leg{font-size:.7rem;color:var(--dim);text-align:center;margin-bottom:4px}
+.sync-lock{pointer-events:none;opacity:.55;filter:saturate(.75)}
 /* Guide panel */
 .room-wrap{display:flex;gap:14px;align-items:flex-start;width:100%;max-width:860px;justify-content:center;margin:0 auto}
 .guide{background:var(--sur);border:1px solid var(--brd);border-radius:var(--r);
@@ -352,7 +354,10 @@ input.f::placeholder{color:var(--dim)}
 const BROKER  = 'wss://broker.hivemq.com:8884/mqtt';
 const PREFIX  = 'rjpq-tool-v2';
 const HOST_HEARTBEAT_MS = 10000;
-const ROOM_STALE_MS = 30000;
+const ROOM_STALE_MS = 600000;
+const MQTT_RECONNECT_MS = 2500;
+const JOIN_VERIFY_MS = 8000;
+const SESSION_KEY = `${PREFIX}/session`;
 
 const COLORS  = ['orange','green','blue','pink'];
 const CHX     = {orange:'#ff8c42',green:'#3ddc84',blue:'#4fc3f7',pink:'#f06292'};
@@ -376,6 +381,16 @@ let hostHeartbeatTimer = null;
 let hostWatchTimer = null;
 let playerMap  = {};          // peerId → { color, name }
 let hasState   = false;
+let roomEntered = false;
+let awaitingRoomInfo = false;
+let joinVerifyTimer = null;
+let hasConnectedOnce = false;
+let reconnectToastSent = false;
+let restoreAttempted = false;
+let roomSyncReady = false;
+let resyncFallbackTimer = null;
+let pubQueue = [];
+let peerDisconnectTimers = {};
 let doors      = make10x4();  // [floor][door] = {colors:[], wrongMark:false}
 const PRESET_NAMES = ['芬妮','小塏','文大','TZE','Jeffrey','訪客'];
 
@@ -410,14 +425,201 @@ function setStatus(txt, state) {
   dot.className = 'sdot' + (state ? ' '+state : '');
 }
 
+function saveSession() {
+  const snapshot = {
+    roomCode,
+    roomPass,
+    myName,
+    myColor,
+    isHost,
+    lang,
+    savedAt: Date.now(),
+  };
+  if (!snapshot.roomCode || !snapshot.roomPass) return;
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
+  } catch {}
+}
+
+function clearSession() {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {}
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const session = JSON.parse(raw);
+    if (!session || !session.roomCode || !session.roomPass) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function syncSessionToInputs() {
+  document.getElementById('join-code').value = '';
+  document.getElementById('join-pass').value = '';
+  document.getElementById('name-input').value = myName || '';
+  document.getElementById('chint').textContent = myColor
+    ? (lang==='zh' ? '已選：' : 'Selected: ') + CNAMES[lang][myColor] + (myName ? ' · ' + myName : '')
+    : (lang==='zh' ? '尚未選擇' : 'Not selected');
+}
+
+function clearJoinVerifyTimer() {
+  clearTimeout(joinVerifyTimer);
+  joinVerifyTimer = null;
+}
+
+function clearResyncFallbackTimer() {
+  clearTimeout(resyncFallbackTimer);
+  resyncFallbackTimer = null;
+}
+
+function clearPeerDisconnectTimer(peerId) {
+  clearTimeout(peerDisconnectTimers[peerId]);
+  delete peerDisconnectTimers[peerId];
+}
+
+function schedulePeerDisconnectCleanup(peerId) {
+  clearPeerDisconnectTimer(peerId);
+  peerDisconnectTimers[peerId] = setTimeout(() => {
+    delete playerMap[peerId];
+    updatePCount();
+    updateColorDots();
+    renderPlayerList();
+    clearPeerDisconnectTimer(peerId);
+  }, 30000);
+}
+
+function clearAllPeerDisconnectTimers() {
+  Object.keys(peerDisconnectTimers).forEach(clearPeerDisconnectTimer);
+}
+
+function handleSyncError(message, {exitRoom=false}={}) {
+  clearJoinVerifyTimer();
+  clearResyncFallbackTimer();
+  const msg = message || (lang==='zh' ? '同步失敗，正在重試…' : 'Sync failed. Retrying…');
+  setStatus(msg, 'warn');
+  if (roomEntered && !exitRoom) {
+    toast(msg, 2600);
+    return;
+  }
+  showErr('join-err', msg);
+  showErr('create-err', msg);
+  if (exitRoom) doExit(true);
+}
+
+function updateInteractionLock() {
+  const locked = !roomSyncReady;
+  const grid = document.getElementById('dgrid');
+  if (grid) grid.classList.toggle('sync-lock', locked);
+  document.querySelectorAll('.dbtn').forEach(btn => {
+    btn.disabled = locked;
+  });
+  const clearBtn = document.getElementById('btn-clear');
+  if (clearBtn) clearBtn.disabled = locked;
+  const nameInput = document.getElementById('name-input');
+  if (nameInput) nameInput.disabled = locked;
+  document.querySelectorAll('.cdot,.namechip').forEach(el => {
+    el.style.pointerEvents = locked ? 'none' : '';
+    el.style.opacity = locked ? '0.45' : '';
+  });
+}
+
+function flushPubQueue() {
+  if (!client || !roomCode || !client.connected || !pubQueue.length) return;
+  const rest = [];
+  pubQueue.forEach(item => {
+    if (item.requireSyncReady && !roomSyncReady) {
+      rest.push(item);
+      return;
+    }
+    client.publish(topicEvents(roomCode), JSON.stringify({...item.event, from: myId}), {qos:0});
+  });
+  pubQueue = rest;
+}
+
+function markRoomSyncPending(statusText) {
+  roomSyncReady = false;
+  clearResyncFallbackTimer();
+  if (statusText) setStatus(statusText, 'warn');
+  updateInteractionLock();
+}
+
+function markRoomSyncReady(statusText=null) {
+  roomSyncReady = true;
+  clearResyncFallbackTimer();
+  if (statusText) setStatus(statusText, 'ok');
+  updateInteractionLock();
+  flushPubQueue();
+}
+
+function scheduleResyncFallback() {
+  clearResyncFallbackTimer();
+  if (isHost) return;
+  resyncFallbackTimer = setTimeout(() => {
+    if (!roomSyncReady) {
+      setStatus(lang==='zh' ? '已連線，但仍在等待同步…' : 'Connected, still waiting for sync…', 'warn');
+      toast(lang==='zh' ? '尚未收到完整同步，暫時無法操作' : 'Full sync not received yet. Controls remain locked.', 2600);
+      publishPresence();
+      pub({type:'request_state'}, {requireSyncReady:false});
+      scheduleResyncFallback();
+    }
+  }, 4000);
+}
+
+function ensureRoomSyncReady() {
+  if (roomSyncReady) return true;
+  toast(lang==='zh' ? '正在重新同步房間，請稍候…' : 'Room is resyncing. Please wait…', 2200);
+  return false;
+}
+
+function subscribeTopicAsync(topic, options={qos:1}) {
+  return new Promise((resolve, reject) => {
+    client.subscribe(topic, options, err => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+async function subscribeRoomChannels({includeInfo=false}={}) {
+  const tasks = [subscribeTopicAsync(topicEvents(roomCode), {qos:1})];
+  if (includeInfo) tasks.unshift(subscribeTopicAsync(topicInfo(roomCode), {qos:1}));
+  await Promise.all(tasks);
+}
+
+function scheduleRoomVerify(ms = JOIN_VERIFY_MS) {
+  clearJoinVerifyTimer();
+  if (!roomCode || isHost) return;
+  joinVerifyTimer = setTimeout(() => {
+    if (!awaitingRoomInfo) return;
+    const msg = roomEntered
+      ? (lang==='zh' ? '房間連線恢復失敗，請重新加入' : 'Failed to restore room connection. Please rejoin.')
+      : (lang==='zh' ? `找不到房間 ${roomCode}，請確認房號` : `Room ${roomCode} not found`);
+    showErr('join-err', msg);
+    doExit(true);
+  }, ms);
+}
+
 // ── MQTT publish helper ──────────────────────────────────
-function pub(event) {
-  if (!client || !roomCode) return;
+function pub(event, {queueOnOffline=true, requireSyncReady=true} = {}) {
+  if (!roomCode) return;
+  if (!client || !client.connected || (requireSyncReady && !roomSyncReady)) {
+    if (queueOnOffline) {
+      pubQueue.push({event, requireSyncReady});
+      if (pubQueue.length > 60) pubQueue.shift();
+    }
+    return;
+  }
   client.publish(topicEvents(roomCode), JSON.stringify({...event, from: myId}), {qos:0});
 }
 
 function publishPresence() {
-  pub({ type:'hello', color: myColor || null, name: myName || '', joinedAt: Date.now() });
+  pub({ type:'hello', color: myColor || null, name: myName || '', joinedAt: Date.now() }, {requireSyncReady:false});
 }
 
 function getRoomInfoPayload() {
@@ -445,11 +647,11 @@ function startHostHeartbeat() {
   clearHostTimers();
   hostBeatAt = Date.now();
   publishRoomInfo();
-  pub({type:'host_ping'});
+  pub({type:'host_ping'}, {queueOnOffline:false});
   hostHeartbeatTimer = setInterval(() => {
     hostBeatAt = Date.now();
     publishRoomInfo();
-    pub({type:'host_ping'});
+    pub({type:'host_ping'}, {queueOnOffline:false});
   }, HOST_HEARTBEAT_MS);
 }
 
@@ -464,11 +666,146 @@ function startHostWatch() {
   clearInterval(hostWatchTimer);
   if (isHost || !hostId) return;
   hostWatchTimer = setInterval(() => {
+    if (!client || !client.connected) return;
     if (!hostBeatAt) return;
     if (Date.now() - hostBeatAt > ROOM_STALE_MS) {
       expireRoom(lang==='zh' ? '房主已離線，房間已失效' : 'Host offline. Room expired.');
     }
   }, 3000);
+}
+
+async function recoverRoomSession() {
+  if (!client || !roomCode) return;
+  try {
+    if (isHost) {
+      hasState = true;
+      markRoomSyncReady(lang==='zh' ? '已重新連線' : 'Reconnected');
+      await subscribeRoomChannels();
+      publishRoomInfo();
+      if (!roomEntered) {
+        enterRoom();
+      } else {
+        startHostHeartbeat();
+      }
+      publishPresence();
+      pub({type:'request_state'});
+      return;
+    }
+
+    hasState = false;
+    awaitingRoomInfo = true;
+    markRoomSyncPending(roomEntered
+      ? (lang==='zh' ? '重新連線成功，正在同步房間…' : 'Reconnected. Syncing room…')
+      : (lang==='zh' ? '正在驗證房間…' : 'Verifying room…'));
+    await subscribeRoomChannels({includeInfo:true});
+    flushPubQueue();
+    scheduleRoomVerify(roomEntered ? ROOM_STALE_MS : JOIN_VERIFY_MS);
+    if (roomEntered) {
+      publishPresence();
+      pub({type:'request_state'}, {requireSyncReady:false});
+      scheduleResyncFallback();
+    }
+  } catch (err) {
+    handleSyncError(
+      (lang==='zh' ? '重連後訂閱失敗，正在重試…' : 'Failed to resubscribe after reconnect. Retrying…') +
+      (err?.message ? ` (${err.message})` : '')
+    );
+  }
+}
+
+function reconnectNow() {
+  if (!roomCode || !roomPass) return;
+
+  if (client) {
+    try { client.end(true); } catch {}
+    client = null;
+  }
+  clearHostTimers();
+  clearJoinVerifyTimer();
+  hasConnectedOnce = false;
+  reconnectToastSent = false;
+  awaitingRoomInfo = !isHost;
+
+  connectMQTT(async () => {
+    try {
+      if (isHost) {
+        await subscribeRoomChannels();
+        hasState = true;
+        markRoomSyncReady(lang==='zh' ? '已重新連線' : 'Reconnected');
+        if (!roomEntered) enterRoom();
+        else {
+          startHostHeartbeat();
+        }
+        publishRoomInfo();
+        publishPresence();
+        pub({type:'request_state'});
+        return;
+      }
+
+      hasState = false;
+      markRoomSyncPending(roomEntered
+        ? (lang==='zh' ? '回到頁面，正在恢復連線…' : 'Back in app. Restoring connection…')
+        : (lang==='zh' ? '正在驗證房間…' : 'Verifying room…'));
+      await subscribeRoomChannels({includeInfo:true});
+      flushPubQueue();
+      scheduleRoomVerify(roomEntered ? ROOM_STALE_MS : JOIN_VERIFY_MS);
+      if (roomEntered) {
+        publishPresence();
+        pub({type:'request_state'}, {requireSyncReady:false});
+        scheduleResyncFallback();
+      }
+    } catch (err) {
+      handleSyncError(
+        (lang==='zh' ? '恢復連線失敗，正在重試…' : 'Failed to restore connection. Retrying…') +
+        (err?.message ? ` (${err.message})` : '')
+      );
+    }
+  });
+}
+
+function attemptForegroundRecovery(reason='') {
+  if (!roomCode || !roomPass || !roomEntered) return;
+  if (client?.connected) {
+    if (isHost) {
+      publishRoomInfo();
+      startHostHeartbeat();
+      markRoomSyncReady(lang==='zh' ? '已連線' : 'Connected');
+      publishPresence();
+      pub({type:'request_state'}, {requireSyncReady:false});
+      return;
+    }
+    markRoomSyncPending(lang==='zh' ? '已回到頁面，正在重新同步…' : 'Back in app. Resyncing…');
+    publishPresence();
+    pub({type:'request_state'}, {requireSyncReady:false});
+    flushPubQueue();
+    scheduleResyncFallback();
+    return;
+  }
+  markRoomSyncPending(lang==='zh' ? '正在恢復連線…' : 'Restoring connection…');
+  if (reason) toast(reason, 2200);
+  reconnectNow();
+}
+
+function restoreSavedSession() {
+  if (restoreAttempted || roomEntered || roomCode || client) return;
+  restoreAttempted = true;
+  const session = loadSession();
+  if (!session) return;
+
+  roomCode = String(session.roomCode || '').trim();
+  roomPass = String(session.roomPass || '').trim();
+  myName = String(session.myName || '').trim();
+  myColor = session.myColor || null;
+  isHost = Boolean(session.isHost);
+  hostId = isHost ? myId : null;
+  if (session.lang === 'zh' || session.lang === 'en') lang = session.lang;
+
+  syncSessionToInputs();
+  applyLang();
+  syncNameUI();
+  updateColorDots();
+
+  reconnectNow();
 }
 
 // ── Connect to MQTT broker ───────────────────────────────
@@ -480,25 +817,45 @@ function connectMQTT(onReady) {
     clientId: cid,
     clean: true,
     connectTimeout: 12000,
-    reconnectPeriod: 0,      // no auto-reconnect for cleaner UX
+    reconnectPeriod: MQTT_RECONNECT_MS,
     will: roomCode ? {
       topic: topicEvents(roomCode),
-      payload: JSON.stringify({type:'bye', from: myId}),
+      payload: JSON.stringify({type:'disconnect', from: myId}),
       qos: 0,
       retain: false,
     } : undefined,
   });
 
-  client.on('connect', () => onReady());
+  client.on('connect', () => {
+    reconnectToastSent = false;
+    if (!hasConnectedOnce) {
+      hasConnectedOnce = true;
+      onReady();
+      return;
+    }
+    recoverRoomSession();
+  });
   client.on('error', err => {
     const msg = lang==='zh' ? '連線錯誤：' + (err.message||'') : 'Connection error: ' + (err.message||'');
-    setStatus(msg, '');
+    setStatus(roomEntered ? (lang==='zh' ? '連線異常，正在重試…' : 'Connection issue. Retrying…') : msg, 'warn');
     showErr('join-err',   msg);
     showErr('create-err', msg);
   });
   client.on('message', onMessage);
-  client.on('reconnect', () => setStatus(lang==='zh' ? '重新連線中…':'Reconnecting…','warn'));
-  client.on('offline',   () => setStatus(lang==='zh' ? '已離線':'Offline', ''));
+  client.on('reconnect', () => {
+    setStatus(lang==='zh' ? '重新連線中…':'Reconnecting…','warn');
+    if (roomEntered && !reconnectToastSent) {
+      reconnectToastSent = true;
+      toast(lang==='zh' ? '網路中斷，正在重新連線…' : 'Connection lost. Reconnecting…', 2800);
+    }
+  });
+  client.on('offline', () => {
+    setStatus(roomEntered ? (lang==='zh' ? '連線中斷，等待重連…' : 'Offline. Waiting to reconnect…') : (lang==='zh' ? '已離線' : 'Offline'), 'warn');
+  });
+  client.on('close', () => {
+    if (!client || !roomEntered) return;
+    setStatus(lang==='zh' ? '連線已關閉，正在重連…' : 'Connection closed. Reconnecting…', 'warn');
+  });
 }
 
 // ── Message handler ──────────────────────────────────────
@@ -515,33 +872,37 @@ function onMessage(topic, payload) {
 }
 
 function handleInfoMsg(raw) {
-  // Called only during join flow; after verification we unsubscribe
   try {
     const info = JSON.parse(raw);
-    if (info.password !== roomPass) {
+    if (awaitingRoomInfo && info.password !== roomPass) {
       showErr('join-err', lang==='zh' ? '密碼錯誤 / Wrong password' : 'Wrong password');
       doExit(true);
       return;
     }
     const infoSeenAt = info.lastSeen || info.created || 0;
     const isLegacyRoom = !info.hostId || !info.lastSeen;
-    if (!isLegacyRoom && infoSeenAt && (Date.now() - infoSeenAt > ROOM_STALE_MS)) {
+    if (awaitingRoomInfo && !isLegacyRoom && infoSeenAt && (Date.now() - infoSeenAt > ROOM_STALE_MS)) {
       showErr('join-err', lang==='zh' ? '房間已失效，請重新建立' : 'Room expired. Create a new room.');
       doExit(true);
       return;
     }
     hostId = info.hostId || null;
     hostBeatAt = infoSeenAt || Date.now();
-    // Password OK — subscribe to events and enter room
-    client.unsubscribe(topicInfo(roomCode));
-    client.subscribe(topicEvents(roomCode), {qos:1});
-    enterRoom();
-    // Announce and request state
+    clearJoinVerifyTimer();
+    if (!awaitingRoomInfo) return;
+    awaitingRoomInfo = false;
+    if (!roomEntered) {
+      markRoomSyncPending(lang==='zh' ? '已連線，正在同步房間…' : 'Connected. Syncing room…');
+      enterRoom();
+    } else {
+      markRoomSyncPending(lang==='zh' ? '已重新連線，正在同步房間…' : 'Reconnected. Syncing room…');
+    }
     publishPresence();
-    pub({type:'request_state'});
+    pub({type:'request_state'}, {requireSyncReady:false});
+    scheduleResyncFallback();
   } catch {
     showErr('join-err', lang==='zh' ? '無法解析房間資訊' : 'Failed to parse room info');
-    doExit(true);
+    if (!roomEntered) doExit(true);
   }
 }
 
@@ -551,6 +912,7 @@ function handleEvent(ev) {
   if (from === myId) return; // ignore own messages
 
   if (type === 'hello') {
+    clearPeerDisconnectTimer(from);
     playerMap[from] = {
       color: ev.color ?? playerMap[from]?.color ?? null,
       name: ev.name ?? playerMap[from]?.name ?? '',
@@ -562,7 +924,7 @@ function handleEvent(ev) {
         type:'full_state',
         doors: serDoors(),
         players: getPlayers(),
-      }), Math.random() * 800 | 0);
+      }, {requireSyncReady:false}), Math.random() * 800 | 0);
     }
   }
 
@@ -576,13 +938,14 @@ function handleEvent(ev) {
       type:'full_state',
       doors: serDoors(),
       players: getPlayers(),
-    }), Math.random() * 800 | 0);
+    }, {requireSyncReady:false}), Math.random() * 800 | 0);
   }
 
   if (type === 'full_state' && !hasState) {
     doors = desDoors(ev.doors);
     renderAll();
     // Restore known peers, including users without a chosen color yet
+    playerMap = {};
     if (ev.players || ev.playerColors) {
       const source = ev.players || ev.playerColors;
       Object.entries(source).forEach(([pid,data]) => {
@@ -592,6 +955,7 @@ function handleEvent(ev) {
     }
     updatePCount(); updateColorDots(); renderPlayerList();
     hasState = true;
+    markRoomSyncReady(lang==='zh' ? '已連線' : 'Connected');
   }
 
   if (type === 'door_toggle') {
@@ -662,6 +1026,7 @@ function handleEvent(ev) {
       syncNameUI();
       updateColorDots();
       renderPlayerList();
+      saveSession();
       return;
     }
     playerMap[peerId] = {
@@ -688,13 +1053,22 @@ function handleEvent(ev) {
     toast(lang==='zh' ? '已清除所有標記' : 'All marks cleared');
   }
 
-  if (type === 'bye') {
+  if (type === 'leave') {
     if (!isHost && from === hostId) {
       expireRoom(lang==='zh' ? '房主已離開，房間已關閉' : 'Host left. Room closed.');
       return;
     }
     delete playerMap[from];
     updatePCount(); updateColorDots(); renderPlayerList();
+  }
+
+  if (type === 'disconnect') {
+    if (from === hostId && !isHost) {
+      setStatus(lang==='zh' ? '房主斷線，等待恢復…' : 'Host disconnected. Waiting for recovery…', 'warn');
+      toast(lang==='zh' ? '房主暫時斷線，房間保留中…' : 'Host disconnected temporarily. Room is being kept alive.', 2800);
+      return;
+    }
+    schedulePeerDisconnectCleanup(from);
   }
 }
 
@@ -716,6 +1090,7 @@ function getPlayers() {
 
 // ── Enter room ───────────────────────────────────────────
 function enterRoom() {
+  roomEntered = true;
   document.getElementById('disp-code').textContent = roomCode;
   document.getElementById('disp-pass').textContent = roomPass;
   setStatus(lang==='zh' ? '已連線' : 'Connected', 'ok');
@@ -724,6 +1099,10 @@ function enterRoom() {
   updateColorDots();
   renderPlayerList();
   syncNameUI();
+  syncSessionToInputs();
+  saveSession();
+  updateInteractionLock();
+  if (isHost) markRoomSyncReady(lang==='zh' ? '已連線' : 'Connected');
   if (isHost) startHostHeartbeat();
   else startHostWatch();
   showScr('room');
@@ -739,15 +1118,24 @@ function createRoom() {
   roomPass = pass;
   isHost = true;
   hostId = myId;
+  saveSession();
 
-  connectMQTT(() => {
-    // Publish retained room info
-    publishRoomInfo();
-    // Subscribe to events
-    client.subscribe(topicEvents(roomCode), {qos:1});
-    hasState = true;
-    enterRoom();
-    publishPresence();
+  connectMQTT(async () => {
+    try {
+      // Publish retained room info
+      publishRoomInfo();
+      // Subscribe to events
+      await subscribeRoomChannels();
+      hasState = true;
+      enterRoom();
+      publishPresence();
+    } catch (err) {
+      handleSyncError(
+        (lang==='zh' ? '建立房間失敗，請重試' : 'Failed to create room. Please try again.') +
+        (err?.message ? ` (${err.message})` : ''),
+        {exitRoom:true}
+      );
+    }
   });
 }
 
@@ -763,34 +1151,27 @@ function joinRoom() {
   roomPass = pass;
   isHost = false;
   hostId = null;
+  awaitingRoomInfo = true;
+  saveSession();
 
-  connectMQTT(() => {
-    // Subscribe to info topic to get retained room info (for password check)
-    client.subscribe(topicInfo(roomCode), {qos:1});
-    setStatus(lang==='zh' ? '正在驗證房間…' : 'Verifying room…', 'warn');
-
-    // Timeout if no retained message (room doesn't exist)
-    const timer = setTimeout(() => {
-      showErr('join-err', lang==='zh' ? `找不到房間 ${code}，請確認房號` : `Room ${code} not found`);
-      doExit(true);
-    }, 6000);
-
-    // One-shot listener for info message
-    const origHandler = client.listeners('message')[0];
-    client.removeAllListeners('message');
-    client.on('message', (topic, payload) => {
-      if (topic === topicInfo(roomCode)) {
-        clearTimeout(timer);
-        client.removeAllListeners('message');
-        client.on('message', onMessage); // restore normal handler
-        handleInfoMsg(payload.toString());
-      }
-    });
+  connectMQTT(async () => {
+    try {
+      await subscribeRoomChannels({includeInfo:true});
+      setStatus(lang==='zh' ? '正在驗證房間…' : 'Verifying room…', 'warn');
+      scheduleRoomVerify(JOIN_VERIFY_MS);
+    } catch (err) {
+      handleSyncError(
+        (lang==='zh' ? '加入房間失敗，請重試' : 'Failed to join room. Please try again.') +
+        (err?.message ? ` (${err.message})` : ''),
+        {exitRoom:true}
+      );
+    }
   });
 }
 
 // ── Door clicks ──────────────────────────────────────────
 function onLeft(f, d) {
+  if (!ensureRoomSyncReady()) return;
   if (!myColor) { toast(lang==='zh'?'請先選擇顏色！':'Pick a color first!'); return; }
   const cell = doors[f][d];
   const idx  = cell.colors.indexOf(myColor);
@@ -805,6 +1186,7 @@ function onRight(f, d) {
 
 // ── Color pick ───────────────────────────────────────────
 function pickColor(color) {
+  if (!ensureRoomSyncReady()) return;
   if (isHost) {
     const taken = isColorTakenByOther(color, myId);
     if (taken && color !== myColor) { toast(lang==='zh'?'此顏色已被使用':'Color taken'); return; }
@@ -816,6 +1198,7 @@ function pickColor(color) {
     document.getElementById('chint').textContent =
       (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][color] + ' · ' + myName;
     renderPlayerList();
+    saveSession();
     return;
   }
 
@@ -866,6 +1249,7 @@ function isNameTaken(name) {
 }
 
 function requestNameChange(name) {
+  if (!ensureRoomSyncReady()) return;
   const nextName = (name || '').trim();
   if (!nextName) {
     toast(lang==='zh' ? '請先輸入名字' : 'Enter a name first');
@@ -885,6 +1269,7 @@ function requestNameChange(name) {
       document.getElementById('chint').textContent =
         (lang==='zh'?'已選：':'Selected: ') + CNAMES[lang][myColor] + ' · ' + myName;
     }
+    saveSession();
     return;
   }
   pub({type:'claim_name', name: nextName});
@@ -1013,6 +1398,7 @@ function copyInfo() {
 
 // ── Clear all ─────────────────────────────────────────────
 function doClear() {
+  if (!ensureRoomSyncReady()) return;
   if (!confirm(lang==='zh'?'確定清除所有標記？':'Clear all marks?')) return;
   doors = make10x4(); renderAll();
   pub({type:'clear_all'});
@@ -1022,15 +1408,23 @@ function doClear() {
 // ── Exit ─────────────────────────────────────────────────
 function doExit(silent=false) {
   clearHostTimers();
+  clearJoinVerifyTimer();
+  clearAllPeerDisconnectTimers();
+  awaitingRoomInfo = false;
+  hasConnectedOnce = false;
+  reconnectToastSent = false;
+  if (!silent) clearSession();
+  pubQueue = [];
   if (client) {
-    if (!silent && roomCode) pub({type:'bye'});
-    if (isHost && roomCode) {
+    if (!silent && roomCode) pub({type:'leave'});
+    if (!silent && isHost && roomCode) {
       client.publish(topicInfo(roomCode), '', {retain:true, qos:1});
     }
-    client.end(true);
+    client.end(silent);
     client = null;
   }
-  roomCode=null; roomPass=null; myColor=null; myName=''; isHost=false; hasState=false;
+  roomCode=null; roomPass=null; myColor=null; myName=''; isHost=false; hasState=false; roomEntered=false;
+  roomSyncReady=false;
   hostId=null;
   hostBeatAt=0;
   playerMap={}; doors=make10x4();
@@ -1041,6 +1435,7 @@ function doExit(silent=false) {
   document.getElementById('chint').textContent = lang==='zh'?'尚未選擇':'Not selected';
   renderPlayerList();
   syncNameUI();
+  updateInteractionLock();
   clearErr('join-err'); clearErr('create-err');
   showScr('home');
 }
@@ -1095,6 +1490,12 @@ function applyLang() {
 
 // ── Boot ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  const savedSession = loadSession();
+  if (savedSession && (savedSession.lang === 'zh' || savedSession.lang === 'en')) {
+    lang = savedSession.lang;
+  }
+  applyLang();
+
   document.getElementById('btn-join').addEventListener('click', joinRoom);
   document.getElementById('btn-create').addEventListener('click', createRoom);
   ['join-code','join-pass'].forEach(id =>
@@ -1131,9 +1532,22 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-clear').addEventListener('click', doClear);
   document.getElementById('btn-exit').addEventListener('click', ()=>doExit(false));
   document.getElementById('btn-lang').addEventListener('click', ()=>{
-    lang = lang==='zh'?'en':'zh'; applyLang();
+    lang = lang==='zh'?'en':'zh'; applyLang(); saveSession();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      attemptForegroundRecovery(lang==='zh' ? '已回到頁面，正在同步房間…' : 'Back in app. Syncing room…');
+    }
+  });
+  window.addEventListener('focus', () => {
+    attemptForegroundRecovery();
+  });
+  window.addEventListener('pageshow', () => {
+    attemptForegroundRecovery();
+    restoreSavedSession();
   });
   renderPlayerList();
+  restoreSavedSession();
 });
 </script>
 </body>
